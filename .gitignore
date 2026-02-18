@@ -1,0 +1,31 @@
+# Xcode
+*.xcodeproj/
+xcuserdata/
+*.xcworkspace/
+DerivedData/
+
+# Build artifacts
+build/
+
+# Distribution (built app + DMG are not checked in)
+dist/ImmichVault.app
+dist/ImmichVault.dmg
+
+# ffmpeg binaries (downloaded separately via scripts/download_ffmpeg.sh)
+ImmichVault/Resources/Binaries/ffmpeg
+ImmichVault/Resources/Binaries/ffprobe
+
+# SPM
+.build/
+Package.resolved
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Claude Code
+.claude/
+
+# Misc
+*.log

@@ -29,6 +29,7 @@ Package.resolved
 # Development artifacts
 .claude/
 CLAUDE.md
+claude.md
 CLAUDE_MEMORY.md
 CLAUDE_PHASE_DETAILS.md
 mockup*.html

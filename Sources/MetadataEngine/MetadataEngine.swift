@@ -58,10 +58,18 @@ public enum MetadataEngine {
     ///   - output: Metadata from the transcoded file.
     ///   - tolerance: Acceptable tolerance thresholds.
     /// - Returns: Validation result with any mismatches.
+    /// - Parameters:
+    ///   - source: Metadata from the original file.
+    ///   - output: Metadata from the transcoded file.
+    ///   - tolerance: Acceptable tolerance thresholds.
+    ///   - allowResolutionChange: When `true`, resolution mismatches are downgraded from
+    ///     critical to info. Set this when the user intentionally chose a different target
+    ///     resolution (e.g. 4K → 1080p).
     public static func validateMetadata(
         source: VideoMetadata,
         output: VideoMetadata,
-        tolerance: MetadataTolerance = .default
+        tolerance: MetadataTolerance = .default,
+        allowResolutionChange: Bool = false
     ) -> MetadataValidationResult {
         var mismatches: [MetadataMismatch] = []
 
@@ -93,14 +101,32 @@ public enum MetadataEngine {
             ))
         }
 
-        // Resolution check (critical)
-        if let srcRes = source.resolution, let outRes = output.resolution {
-            if srcRes != outRes {
+        // Resolution + Rotation check
+        // When ffmpeg auto-rotates (source has 90°/270° rotation, output has 0°),
+        // the output dimensions are swapped (WxH -> HxW). This is correct behavior —
+        // the pixels are physically rotated so the video displays identically.
+        let srcRot = source.rotation ?? 0
+        let outRot = output.rotation ?? 0
+        let wasAutoRotated = (srcRot == 90 || srcRot == 270) && outRot == 0
+
+        if let srcW = source.width, let srcH = source.height,
+           let outW = output.width, let outH = output.height {
+            let dimensionsMatch: Bool
+            if wasAutoRotated {
+                // After auto-rotation: source WxH should become HxW in output
+                dimensionsMatch = (outW == srcH && outH == srcW)
+            } else {
+                dimensionsMatch = (outW == srcW && outH == srcH)
+            }
+            if !dimensionsMatch {
+                // When the user intentionally chose a different resolution, this is expected —
+                // downgrade from critical to info so it doesn't block replacement.
+                let severity: MismatchSeverity = allowResolutionChange ? .info : .critical
                 mismatches.append(MetadataMismatch(
                     field: "resolution",
-                    expected: srcRes,
-                    actual: outRes,
-                    severity: .critical
+                    expected: wasAutoRotated ? "\(srcH)x\(srcW) (auto-rotated from \(srcW)x\(srcH))" : "\(srcW)x\(srcH)",
+                    actual: "\(outW)x\(outH)",
+                    severity: severity
                 ))
             }
         } else if source.resolution != nil && output.resolution == nil {
@@ -112,17 +138,22 @@ public enum MetadataEngine {
             ))
         }
 
-        // Rotation check (critical)
-        if let srcRot = source.rotation {
-            let outRot = output.rotation ?? 0
-            if srcRot != outRot {
-                mismatches.append(MetadataMismatch(
-                    field: "rotation",
-                    expected: "\(srcRot)",
-                    actual: "\(outRot)",
-                    severity: .critical
-                ))
-            }
+        // Rotation check — auto-rotation (source rotated, output 0°) is valid
+        if srcRot != outRot && !wasAutoRotated {
+            mismatches.append(MetadataMismatch(
+                field: "rotation",
+                expected: "\(srcRot)",
+                actual: "\(outRot)",
+                severity: .critical
+            ))
+        } else if wasAutoRotated {
+            // Informational: auto-rotation was applied
+            mismatches.append(MetadataMismatch(
+                field: "rotation",
+                expected: "\(srcRot)° (source)",
+                actual: "0° (auto-rotated)",
+                severity: .info
+            ))
         }
 
         // Creation date check (warning if within tolerance, critical if way off)
@@ -148,14 +179,14 @@ public enum MetadataEngine {
             ))
         }
 
-        // GPS check (warning -- GPS should be preserved but may be stripped by some codecs)
+        // GPS check (critical -- GPS coordinates MUST be preserved to prevent data loss)
         if source.hasGPS {
             if !output.hasGPS {
                 mismatches.append(MetadataMismatch(
                     field: "gps",
                     expected: "present (\(source.gpsLatitude ?? 0), \(source.gpsLongitude ?? 0))",
                     actual: "missing",
-                    severity: .warning
+                    severity: .critical
                 ))
             } else if let srcLat = source.gpsLatitude, let srcLon = source.gpsLongitude,
                       let outLat = output.gpsLatitude, let outLon = output.gpsLongitude {
@@ -167,7 +198,7 @@ public enum MetadataEngine {
                         field: "gps",
                         expected: String(format: "%.6f, %.6f", srcLat, srcLon),
                         actual: String(format: "%.6f, %.6f", outLat, outLon),
-                        severity: .warning
+                        severity: .critical
                     ))
                 }
             }
@@ -228,25 +259,98 @@ public enum MetadataEngine {
 
     /// Copies metadata from the source file to the output file using ffmpeg.
     ///
-    /// Runs: `ffmpeg -i <output> -i <source> -map 0 -c copy -map_metadata 1 -movflags +faststart <result>`
-    ///
-    /// This remuxes all streams from the transcoded output but applies metadata
-    /// (creation date, GPS, make/model, etc.) from the original source.
+    /// Uses `-map_metadata 1` for generic metadata copying, plus explicit `-metadata`
+    /// flags for GPS location to ensure vendor-specific location atoms (e.g. QuickTime
+    /// ISO 6709) survive codec re-encoding.
     ///
     /// - Parameters:
     ///   - sourceURL: Original video file (metadata source).
     ///   - outputURL: Transcoded video file (streams source).
     ///   - ffmpegPath: Absolute path to the ffmpeg binary.
+    ///   - ffprobePath: Absolute path to the ffprobe binary (for GPS extraction fallback).
     /// - Returns: URL to the final file with metadata applied.
     /// - Throws: `MetadataEngineError` on failure.
+    /// - Parameters:
+    ///   - sourceURL: Original video file (metadata source).
+    ///   - outputURL: Transcoded video file (streams source).
+    ///   - ffmpegPath: Absolute path to the ffmpeg binary.
+    ///   - ffprobePath: Absolute path to the ffprobe binary.
+    ///   - fallbackLatitude: GPS latitude from Immich API, used when file has no embedded GPS.
+    ///   - fallbackLongitude: GPS longitude from Immich API, used when file has no embedded GPS.
     public static func applyMetadata(
         from sourceURL: URL,
         to outputURL: URL,
-        ffmpegPath: String = "/usr/local/bin/ffmpeg"
+        ffmpegPath: String = "/usr/local/bin/ffmpeg",
+        ffprobePath: String = "/usr/local/bin/ffprobe",
+        fallbackLatitude: Double? = nil,
+        fallbackLongitude: Double? = nil
     ) async throws -> URL {
         // Validate ffmpeg exists
         guard FileManager.default.fileExists(atPath: ffmpegPath) else {
             throw MetadataEngineError.ffmpegNotFound(path: ffmpegPath)
+        }
+
+        // Extract structured metadata (GPS, make, model) AND raw tags from source.
+        // -map_metadata alone does NOT reliably preserve Apple QuickTime vendor tags
+        // across codec changes, so we must explicitly re-inject them.
+        var sourceMeta: VideoMetadata?
+        var sourceTags: [String: String] = [:]
+        if FileManager.default.fileExists(atPath: ffprobePath) {
+            sourceMeta = try? await extractMetadata(from: sourceURL, ffprobePath: ffprobePath)
+            sourceTags = (try? await extractAllTags(from: sourceURL, ffprobePath: ffprobePath)) ?? [:]
+        }
+
+        // Extract additional metadata from exiftool that ffprobe cannot see.
+        // ffprobe does NOT reliably report QuickTime mdta keys like
+        // com.apple.quicktime.camera.lens_model, focal length, GPS, etc.
+        let exiftoolPath = resolveExifToolPath()
+        var exifSourceTags: [String: String] = [:]
+        if !exiftoolPath.isEmpty {
+            exifSourceTags = (try? await extractExifToolTags(from: sourceURL, exiftoolPath: exiftoolPath)) ?? [:]
+        }
+
+        // --- ExifTool GPS fallback ---
+        // ffprobe frequently misses GPS in QuickTime mdta atoms. If ffprobe didn't
+        // find GPS but exiftool did, inject the exiftool GPS into sourceMeta so the
+        // ffmpeg injection and validation both see it.
+        if sourceMeta != nil && !sourceMeta!.hasGPS {
+            if let latStr = exifSourceTags["GPSLatitude"],
+               let lonStr = exifSourceTags["GPSLongitude"],
+               let lat = Double(latStr), let lon = Double(lonStr) {
+                sourceMeta!.gpsLatitude = lat
+                sourceMeta!.gpsLongitude = lon
+                LogManager.shared.info(
+                    "GPS recovered via exiftool (ffprobe missed it): \(lat), \(lon)",
+                    category: .metadata
+                )
+            }
+        }
+
+        // --- Immich API GPS fallback ---
+        // Some files have no GPS in the file at all (e.g., manually geo-tagged in Immich,
+        // Google-produced MP4s, or files where GPS was in a sidecar). Use the GPS from
+        // Immich's asset details API as a last resort.
+        if sourceMeta != nil && !sourceMeta!.hasGPS {
+            if let lat = fallbackLatitude, let lon = fallbackLongitude {
+                sourceMeta!.gpsLatitude = lat
+                sourceMeta!.gpsLongitude = lon
+                LogManager.shared.info(
+                    "GPS recovered via Immich API fallback: \(lat), \(lon)",
+                    category: .metadata
+                )
+            }
+        }
+
+        // Log GPS extraction status for debugging
+        if let meta = sourceMeta {
+            if meta.hasGPS {
+                LogManager.shared.debug(
+                    "Source GPS: \(meta.gpsLatitude ?? 0), \(meta.gpsLongitude ?? 0)",
+                    category: .metadata
+                )
+            } else {
+                LogManager.shared.warning("No GPS found in source via ffprobe, exiftool, or Immich API", category: .metadata)
+            }
         }
 
         // Build output path: insert "_meta" before the extension
@@ -258,16 +362,78 @@ public enum MetadataEngine {
         // Remove existing result file if present
         try? FileManager.default.removeItem(at: resultURL)
 
-        let arguments = [
+        var arguments = [
             "-y",                       // Overwrite without asking
             "-i", outputURL.path,       // Input 0: transcoded file (streams)
             "-i", sourceURL.path,       // Input 1: original file (metadata)
             "-map", "0",                // Map all streams from input 0
             "-c", "copy",               // Copy streams without re-encoding
-            "-map_metadata", "1",       // Copy metadata from input 1
-            "-movflags", "+faststart",  // Optimize for streaming
-            resultURL.path
+            "-map_metadata", "1",       // Copy format-level metadata from input 1
+            "-map_metadata:s:v", "1:s:v",  // Copy video stream metadata from source
+            "-map_metadata:s:a", "1:s:a",  // Copy audio stream metadata from source
+            "-movflags", "+faststart+use_metadata_tags",  // Streaming + write extended QuickTime metadata (mdta handler)
         ]
+
+        // --- Explicit GPS injection (ISO 6709 format) ---
+        // This is the most reliable way to preserve GPS across container/codec changes.
+        if let meta = sourceMeta, meta.hasGPS,
+           let lat = meta.gpsLatitude, let lon = meta.gpsLongitude {
+            let latSign = lat >= 0 ? "+" : ""
+            let lonSign = lon >= 0 ? "+" : ""
+            let iso6709 = "\(latSign)\(String(format: "%.6f", lat))\(lonSign)\(String(format: "%.6f", lon))/"
+            arguments.append(contentsOf: ["-metadata", "location=\(iso6709)"])
+            arguments.append(contentsOf: ["-metadata", "location-eng=\(iso6709)"])
+            arguments.append(contentsOf: ["-metadata", "com.apple.quicktime.location.ISO6709=\(iso6709)"])
+        }
+
+        // --- Explicit make/model injection ---
+        if let make = sourceMeta?.make, !make.isEmpty {
+            arguments.append(contentsOf: ["-metadata", "make=\(make)"])
+            arguments.append(contentsOf: ["-metadata", "com.apple.quicktime.make=\(make)"])
+        }
+        if let model = sourceMeta?.model, !model.isEmpty {
+            arguments.append(contentsOf: ["-metadata", "model=\(model)"])
+            arguments.append(contentsOf: ["-metadata", "com.apple.quicktime.model=\(model)"])
+        }
+
+        // --- Explicit lens model injection ---
+        // ffprobe does NOT report com.apple.quicktime.camera.lens_model, so we must
+        // extract it with exiftool and inject it explicitly for ffmpeg's mdta handler.
+        if let lensModel = exifSourceTags["LensModel"], !lensModel.isEmpty {
+            arguments.append(contentsOf: ["-metadata", "com.apple.quicktime.camera.lens_model=\(lensModel)"])
+            LogManager.shared.debug("Injecting lens model: \(lensModel)", category: .transcode)
+        }
+        if let focalLength = exifSourceTags["FocalLength35efl"], !focalLength.isEmpty {
+            arguments.append(contentsOf: ["-metadata", "com.apple.quicktime.camera.focal_length.35mm_equivalent=\(focalLength)"])
+        }
+        if let lensInfo = exifSourceTags["LensInfo"], !lensInfo.isEmpty {
+            arguments.append(contentsOf: ["-metadata", "com.apple.quicktime.camera.lens_info=\(lensInfo)"])
+        }
+
+        // --- Generic re-injection of all Apple QuickTime tags ---
+        // Catches software version, creation date, and any other vendor tags
+        // that the explicit injection above doesn't cover.
+        let alreadyInjected: Set = [
+            "location", "location-eng",
+            "com.apple.quicktime.location.iso6709",
+            "make", "com.apple.quicktime.make",
+            "model", "com.apple.quicktime.model",
+            "com.apple.quicktime.camera.lens_model",
+            "com.apple.quicktime.camera.focal_length.35mm_equivalent",
+            "com.apple.quicktime.camera.lens_info"
+        ]
+        for (key, value) in sourceTags {
+            guard !value.isEmpty else { continue }
+            guard !alreadyInjected.contains(key.lowercased()) else { continue }
+
+            let isAppleTag = key.lowercased().hasPrefix("com.apple.quicktime.")
+            let isGenericImportant = ["software", "encoder"].contains(key.lowercased())
+            if isAppleTag || isGenericImportant {
+                arguments.append(contentsOf: ["-metadata", "\(key)=\(value)"])
+            }
+        }
+
+        arguments.append(resultURL.path)
 
         _ = try await runProcess(executablePath: ffmpegPath, arguments: arguments)
 
@@ -280,7 +446,225 @@ public enum MetadataEngine {
             )
         }
 
+        // --- ExifTool pass 1: copy metadata groups from source ---
+        // ffmpeg cannot preserve QuickTime-specific atoms (camera.lensModel, focalLength,
+        // GPS, ISO, etc.) across codec changes. We copy specific metadata groups that
+        // contain user/camera data while avoiding technical groups (Track, Video, Audio)
+        // that would overwrite codec/dimension info from the transcode.
+        if !exiftoolPath.isEmpty {
+            let exifCopyArgs = [
+                "-overwrite_original",
+                "-TagsFromFile", sourceURL.path,
+                "-Keys:All",                // Apple QuickTime Keys metadata (com.apple.quicktime.*)
+                "-UserData:All",            // QuickTime UserData atoms (©mak, ©mod, location, etc.)
+                "-XMP:All",                 // XMP metadata (many cameras embed this in videos)
+                "-ItemList:All",            // QuickTime ItemList metadata
+                "-unsafe",                  // Allow writing vendor-specific tags
+                resultURL.path
+            ]
+            LogManager.shared.debug("Running exiftool metadata copy", category: .transcode)
+            do {
+                _ = try await runProcess(executablePath: exiftoolPath, arguments: exifCopyArgs)
+                LogManager.shared.debug("ExifTool metadata copy succeeded", category: .transcode)
+            } catch {
+                // exiftool often exits 1 for minor warnings — file may still be modified
+                LogManager.shared.warning("ExifTool metadata copy had warnings (non-fatal): \(error.localizedDescription)", category: .transcode)
+            }
+
+            // --- ExifTool pass 1b: strip XMP GPS ref tags to prevent sign conflicts ---
+            // The XMP:All copy above may bring XMP:GPSLatitudeRef/GPSLongitudeRef from
+            // the source. These separate ref tags can conflict with the signed values in
+            // ISO 6709 atoms, causing GPS sign flips (W read as E). Remove them so only
+            // the ISO 6709 atoms (written in pass 2) are authoritative.
+            let stripXmpGpsArgs = [
+                "-overwrite_original",
+                "-XMP:GPSLatitude=",
+                "-XMP:GPSLongitude=",
+                "-XMP:GPSLatitudeRef=",
+                "-XMP:GPSLongitudeRef=",
+                resultURL.path
+            ]
+            do {
+                _ = try await runProcess(executablePath: exiftoolPath, arguments: stripXmpGpsArgs)
+                LogManager.shared.debug("Stripped XMP GPS ref tags to prevent sign conflicts", category: .metadata)
+            } catch {
+                // Non-fatal — tags may not exist
+                LogManager.shared.debug("XMP GPS strip had warnings (non-fatal)", category: .metadata)
+            }
+
+            // --- ExifTool pass 2: explicitly write GPS coordinates ---
+            // This guarantees GPS is written even if the group copy above failed
+            // to transfer it (common with cross-container copies).
+            //
+            // IMPORTANT: We write ONLY ISO 6709 format via Keys: and UserData: atoms.
+            // We deliberately do NOT write XMP:GPSLatitude/GPSLongitude/GPSLatitudeRef/
+            // GPSLongitudeRef because the XMP ref tags can conflict with the signed
+            // values in ISO 6709, causing GPS sign flips (e.g. W longitude read as E).
+            // Immich reads QuickTime Keys:GPSCoordinates natively.
+            if let meta = sourceMeta, meta.hasGPS,
+               let lat = meta.gpsLatitude, let lon = meta.gpsLongitude {
+                let latSign = lat >= 0 ? "+" : ""
+                let lonSign = lon >= 0 ? "+" : ""
+                let iso6709 = "\(latSign)\(String(format: "%.6f", lat))\(lonSign)\(String(format: "%.6f", lon))/"
+                let gpsArgs = [
+                    "-overwrite_original",
+                    "-Keys:GPSCoordinates=\(iso6709)",
+                    "-UserData:GPSCoordinates=\(iso6709)",
+                    resultURL.path
+                ]
+                LogManager.shared.debug("Explicitly writing GPS via exiftool (ISO 6709): \(iso6709)", category: .metadata)
+                do {
+                    _ = try await runProcess(executablePath: exiftoolPath, arguments: gpsArgs)
+                    LogManager.shared.info("GPS coordinates written to output via exiftool", category: .metadata)
+                } catch {
+                    LogManager.shared.warning("ExifTool GPS write had warnings: \(error.localizedDescription)", category: .metadata)
+                }
+            }
+        } else {
+            LogManager.shared.error("ExifTool not found — GPS/lens/camera metadata WILL be lost. Install with: brew install exiftool", category: .transcode)
+        }
+
         return resultURL
+    }
+
+    // MARK: - ExifTool Resolution
+
+    /// Resolves path to exiftool binary. Checks Homebrew ARM, Intel, and system PATH.
+    public static func resolveExifToolPath() -> String {
+        let candidates = [
+            "/opt/homebrew/bin/exiftool",    // Homebrew ARM
+            "/usr/local/bin/exiftool",       // Homebrew Intel
+        ]
+        for path in candidates {
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+        // Try system PATH via `which`
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = ["exiftool"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return "" }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let path = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !path.isEmpty && FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        } catch {}
+        return ""
+    }
+}
+
+// MARK: - ExifTool Tag Extraction
+
+public extension MetadataEngine {
+
+    /// Extracts camera-related metadata and GPS from a video file using exiftool.
+    /// Returns a dictionary of tag name → value. Covers tags that ffprobe misses:
+    /// LensModel, LensInfo, FocalLength, GPS coordinates, etc.
+    static func extractExifToolTags(from fileURL: URL, exiftoolPath: String) async throws -> [String: String] {
+        // Use -json for machine-readable output, -s for short tag names, -n for numeric GPS
+        let arguments = [
+            "-json",
+            "-s",
+            "-n",                       // Numeric output (GPS as decimal degrees, not DMS)
+            "-LensModel",
+            "-LensInfo",
+            "-FocalLength",
+            "-FocalLength35efl",
+            "-FocalLengthIn35mmFormat",
+            "-LensMake",
+            "-LensSerialNumber",
+            "-CameraLensModel",
+            "-GPSLatitude",
+            "-GPSLongitude",
+            "-GPSLatitudeRef",
+            "-GPSLongitudeRef",
+            "-GPSPosition",
+            "-GPSCoordinates",
+            "-Make",
+            "-Model",
+            fileURL.path
+        ]
+
+        let outputData = try await runProcess(executablePath: exiftoolPath, arguments: arguments)
+
+        guard let jsonArray = try? JSONSerialization.jsonObject(with: outputData) as? [[String: Any]],
+              let first = jsonArray.first else {
+            return [:]
+        }
+
+        var tags: [String: String] = [:]
+        for (key, value) in first {
+            if key == "SourceFile" { continue }
+            let strValue: String
+            if let s = value as? String {
+                strValue = s
+            } else if let n = value as? NSNumber {
+                strValue = n.stringValue
+            } else {
+                continue
+            }
+            if !strValue.isEmpty {
+                tags[key] = strValue
+            }
+        }
+
+        return tags
+    }
+}
+
+// MARK: - Tag Extraction (All Tags via ffprobe)
+
+private extension MetadataEngine {
+
+    /// Extracts ALL format-level and stream-level tags from a video file via ffprobe.
+    /// Returns a flat dictionary of tag key → value, merging format and stream tags
+    /// (format-level tags take priority for duplicates).
+    static func extractAllTags(from fileURL: URL, ffprobePath: String) async throws -> [String: String] {
+        let arguments = [
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            "-show_streams",
+            fileURL.path
+        ]
+
+        let outputData = try await runProcess(executablePath: ffprobePath, arguments: arguments)
+
+        guard let json = try? JSONSerialization.jsonObject(with: outputData) as? [String: Any] else {
+            return [:]
+        }
+
+        var allTags: [String: String] = [:]
+
+        // Collect stream-level tags first (lower priority)
+        if let streams = json["streams"] as? [[String: Any]] {
+            for stream in streams {
+                if let tags = stream["tags"] as? [String: String] {
+                    for (key, value) in tags where !value.isEmpty {
+                        allTags[key] = value
+                    }
+                }
+            }
+        }
+
+        // Format-level tags override stream-level (higher priority)
+        if let format = json["format"] as? [String: Any],
+           let tags = format["tags"] as? [String: String] {
+            for (key, value) in tags where !value.isEmpty {
+                allTags[key] = value
+            }
+        }
+
+        return allTags
     }
 }
 

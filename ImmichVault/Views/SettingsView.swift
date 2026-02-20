@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var dbSchemaVersion: Int?
     @State private var providerHealthStatus: [TranscodeProviderType: Bool] = [:]
     @State private var providerHealthChecking: Set<TranscodeProviderType> = []
+    @State private var providerKeyInputs: [TranscodeProviderType: String] = [:]
+    @State private var providerKeySaveState: [TranscodeProviderType: Bool] = [:]
 
     enum ConnectionTestResult {
         case success(String)
@@ -132,25 +134,33 @@ struct SettingsView: View {
         settingsCard(title: "Upload Filters", icon: "line.3.horizontal.decrease.circle") {
             VStack(alignment: .leading, spacing: IVSpacing.md) {
                 HStack {
-                    Text("Start Date")
-                        .font(IVFont.captionMedium)
-                        .foregroundColor(.ivTextSecondary)
+                    Toggle(isOn: Binding(
+                        get: { settings.uploadStartDate != nil },
+                        set: { enabled in
+                            if enabled {
+                                settings.uploadStartDate = Date()
+                            } else {
+                                settings.uploadStartDate = nil
+                            }
+                        }
+                    )) {
+                        Text("Start Date")
+                            .font(IVFont.captionMedium)
+                            .foregroundColor(.ivTextSecondary)
+                    }
+
                     Spacer()
-                    DatePicker(
-                        "",
-                        selection: Binding(
-                            get: { settings.uploadStartDate ?? Date() },
-                            set: { settings.uploadStartDate = $0 }
-                        ),
-                        displayedComponents: [.date]
-                    )
-                    .labelsHidden()
 
                     if settings.uploadStartDate != nil {
-                        Button("Clear") {
-                            settings.uploadStartDate = nil
-                        }
-                        .font(IVFont.caption)
+                        DatePicker(
+                            "",
+                            selection: Binding(
+                                get: { settings.uploadStartDate ?? Date() },
+                                set: { settings.uploadStartDate = $0 }
+                            ),
+                            displayedComponents: [.date]
+                        )
+                        .labelsHidden()
                     }
                 }
 
@@ -428,51 +438,136 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func providerKeyRow(label: String, key: KeychainManager.Key, providerType: TranscodeProviderType) -> some View {
-        HStack(spacing: IVSpacing.md) {
-            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+        let keyExists = KeychainManager.shared.exists(key)
+
+        VStack(alignment: .leading, spacing: IVSpacing.sm) {
+            // Header row: name + status
+            HStack(spacing: IVSpacing.md) {
                 Text(label)
                     .font(IVFont.bodyMedium)
                     .foregroundColor(.ivTextPrimary)
-                if let redacted = KeychainManager.shared.readRedacted(key) {
-                    Text(redacted)
-                        .font(IVFont.mono)
-                        .foregroundColor(.ivTextTertiary)
-                } else {
-                    Text("Not configured")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
+
+                Spacer()
+
+                if let healthy = providerHealthStatus[providerType] {
+                    Image(systemName: healthy ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundColor(healthy ? .ivSuccess : .ivError)
+                        .font(.system(size: 14))
                 }
-            }
 
-            Spacer()
-
-            if let healthy = providerHealthStatus[providerType] {
-                Image(systemName: healthy ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundColor(healthy ? .ivSuccess : .ivError)
-                    .font(.system(size: 14))
-            }
-
-            if KeychainManager.shared.exists(key) {
-                Button {
-                    Task { await testProvider(providerType) }
-                } label: {
-                    HStack(spacing: IVSpacing.xs) {
-                        if providerHealthChecking.contains(providerType) {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 12, height: 12)
+                if keyExists {
+                    Button {
+                        Task { await testProvider(providerType) }
+                    } label: {
+                        HStack(spacing: IVSpacing.xs) {
+                            if providerHealthChecking.contains(providerType) {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .frame(width: 12, height: 12)
+                            }
+                            Text(providerHealthChecking.contains(providerType) ? "Testing..." : "Test")
                         }
-                        Text(providerHealthChecking.contains(providerType) ? "Testing..." : "Test")
                     }
+                    .disabled(providerHealthChecking.contains(providerType))
+                    .font(IVFont.caption)
                 }
-                .disabled(providerHealthChecking.contains(providerType))
-                .font(IVFont.caption)
+
+                IVStatusBadge(
+                    keyExists ? "Saved" : "Missing",
+                    status: keyExists ? .success : .idle
+                )
             }
 
-            IVStatusBadge(
-                KeychainManager.shared.exists(key) ? "Saved" : "Missing",
-                status: KeychainManager.shared.exists(key) ? .success : .idle
+            // Current key display
+            if let redacted = KeychainManager.shared.readRedacted(key) {
+                Text(redacted)
+                    .font(IVFont.mono)
+                    .foregroundColor(.ivTextTertiary)
+            }
+
+            // Input row: SecureField + Save + Delete
+            HStack(spacing: IVSpacing.sm) {
+                SecureField(
+                    keyExists ? "Enter new API key to replace" : "Paste \(label) API key",
+                    text: Binding(
+                        get: { providerKeyInputs[providerType] ?? "" },
+                        set: { providerKeyInputs[providerType] = $0 }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(IVFont.body)
+
+                Button("Save") {
+                    saveProviderKey(providerType: providerType, key: key)
+                }
+                .disabled((providerKeyInputs[providerType] ?? "").isEmpty)
+
+                if keyExists {
+                    Button("Delete") {
+                        deleteProviderKey(providerType: providerType, key: key)
+                    }
+                    .foregroundColor(.ivError)
+                }
+            }
+
+            // Transient save confirmation
+            if providerKeySaveState[providerType] == true {
+                HStack(spacing: IVSpacing.xs) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.ivSuccess)
+                        .font(.system(size: 11))
+                    Text("Key saved to Keychain")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivSuccess)
+                }
+                .transition(.opacity)
+            }
+        }
+
+        if providerType != .freeConvert {
+            Divider()
+        }
+    }
+
+    private func saveProviderKey(providerType: TranscodeProviderType, key: KeychainManager.Key) {
+        guard let value = providerKeyInputs[providerType], !value.isEmpty else { return }
+        do {
+            try KeychainManager.shared.save(value, for: key)
+            providerKeyInputs[providerType] = ""
+            providerHealthStatus.removeValue(forKey: providerType)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                providerKeySaveState[providerType] = true
+            }
+            LogManager.shared.info("\(providerType.label) API key saved to Keychain", category: .keychain)
+            ActivityLogService.shared.log(
+                level: .info,
+                category: .keychain,
+                message: "\(providerType.label) API key configured"
             )
+            // Auto-dismiss after 3 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    self.providerKeySaveState[providerType] = nil
+                }
+            }
+        } catch {
+            LogManager.shared.error("Failed to save \(providerType.label) API key: \(error.localizedDescription)", category: .keychain)
+        }
+    }
+
+    private func deleteProviderKey(providerType: TranscodeProviderType, key: KeychainManager.Key) {
+        do {
+            try KeychainManager.shared.delete(key)
+            providerHealthStatus.removeValue(forKey: providerType)
+            providerKeySaveState.removeValue(forKey: providerType)
+            LogManager.shared.info("\(providerType.label) API key deleted from Keychain", category: .keychain)
+            ActivityLogService.shared.log(
+                level: .info,
+                category: .keychain,
+                message: "\(providerType.label) API key removed"
+            )
+        } catch {
+            LogManager.shared.error("Failed to delete \(providerType.label) API key: \(error.localizedDescription)", category: .keychain)
         }
     }
 

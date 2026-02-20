@@ -39,6 +39,13 @@ struct DashboardView: View {
                 viewModel.loadStats()
             }
         }
+        .onChange(of: appState.selectedNavItem) { _ in
+            if appState.selectedNavItem == .dashboard {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    viewModel.loadStats()
+                }
+            }
+        }
     }
 
     // MARK: - Connection Card

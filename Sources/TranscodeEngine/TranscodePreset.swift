@@ -15,9 +15,18 @@ public enum VideoCodec: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    /// The ffmpeg encoder name (same as rawValue).
+    /// The ffmpeg encoder name, resolved at runtime.
+    /// For H.265, prefers `hevc_videotoolbox` (macOS hardware encoder) if `libx265` is unavailable.
     public var ffmpegName: String {
-        rawValue
+        switch self {
+        case .h264: return "libx264"
+        case .h265: return Self.resolvedH265Encoder
+        }
+    }
+
+    /// Whether this codec uses `-q:v` (VideoToolbox) instead of `-crf` for quality control.
+    public var usesQualityParam: Bool {
+        self == .h265 && Self.resolvedH265Encoder == "hevc_videotoolbox"
     }
 
     /// Short identifier for display in compact contexts.
@@ -27,6 +36,30 @@ public enum VideoCodec: String, Codable, Sendable, CaseIterable {
         case .h265: return "H.265"
         }
     }
+
+    /// Cached resolved H.265 encoder name. Checks for libx265 availability once.
+    private static let resolvedH265Encoder: String = {
+        // Check if libx265 is available in the installed ffmpeg
+        let ffmpegPath = LocalFFmpegProvider.resolveBinaryPath("ffmpeg")
+        guard !ffmpegPath.isEmpty else { return "hevc_videotoolbox" }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments = ["-encoders"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            if output.contains("libx265") {
+                return "libx265"
+            }
+        } catch {}
+        return "hevc_videotoolbox"
+    }()
 }
 
 // MARK: - Audio Codec
@@ -50,6 +83,86 @@ public enum AudioCodec: String, Codable, Sendable, CaseIterable {
     }
 }
 
+// MARK: - Target Resolution
+
+/// Target output resolution for transcoding. Uses height-based scaling with `-2` width
+/// to preserve aspect ratio while ensuring even dimensions.
+public enum TargetResolution: String, Codable, Sendable, CaseIterable, Identifiable {
+    case keepSame = "Keep Same"
+    case p480 = "480p"
+    case p720 = "720p"
+    case p1080 = "1080p"
+    case p4K = "4K"
+
+    public var id: String { rawValue }
+
+    /// The target height in pixels, or `nil` for keepSame (no scaling).
+    public var heightValue: Int? {
+        switch self {
+        case .keepSame: return nil
+        case .p480: return 480
+        case .p720: return 720
+        case .p1080: return 1080
+        case .p4K: return 2160
+        }
+    }
+
+    /// Human-readable label.
+    public var label: String { rawValue }
+}
+
+// MARK: - Encode Speed
+
+/// Encoding speed preset for software encoders (libx264/libx265).
+/// Slower speeds produce better compression at the cost of encode time.
+/// Not used by hardware encoders (VideoToolbox).
+public enum EncodeSpeed: String, Codable, Sendable, CaseIterable, Identifiable {
+    case ultrafast
+    case superfast
+    case veryfast
+    case faster
+    case fast
+    case medium
+    case slow
+    case slower
+    case veryslow
+
+    public var id: String { rawValue }
+
+    /// Human-readable label.
+    public var label: String {
+        switch self {
+        case .ultrafast: return "Ultrafast"
+        case .superfast: return "Superfast"
+        case .veryfast: return "Very Fast"
+        case .faster: return "Faster"
+        case .fast: return "Fast"
+        case .medium: return "Medium"
+        case .slow: return "Slow"
+        case .slower: return "Slower"
+        case .veryslow: return "Very Slow"
+        }
+    }
+
+    /// Short description of the speed/quality tradeoff.
+    public var hint: String {
+        switch self {
+        case .ultrafast: return "Fastest encode, largest file"
+        case .superfast: return "Very fast, larger file"
+        case .veryfast: return "Fast encode, slightly larger"
+        case .faster: return "Above average speed"
+        case .fast: return "Good speed, decent compression"
+        case .medium: return "Balanced speed and compression"
+        case .slow: return "Better compression, slower"
+        case .slower: return "High compression, much slower"
+        case .veryslow: return "Best compression, very slow"
+        }
+    }
+
+    /// The ffmpeg `-preset` value.
+    public var ffmpegValue: String { rawValue }
+}
+
 // MARK: - Transcode Preset
 
 /// A named transcode configuration defining codec, quality, and container settings.
@@ -71,6 +184,13 @@ public struct TranscodePreset: Codable, Sendable, Identifiable, Hashable {
     /// Constant Rate Factor — lower values = higher quality, larger files.
     /// Typical range: 18 (visually lossless) to 35 (very compressed).
     public let crf: Int
+
+    /// Optional target resolution. When set, ffmpeg applies a scale filter.
+    /// `nil` means no resolution change (same as `.keepSame`).
+    public let resolution: TargetResolution?
+
+    /// Encoding speed for software encoders. Ignored by hardware encoders (VideoToolbox).
+    public let encodeSpeed: EncodeSpeed
 
     // MARK: - Audio Settings
 
@@ -99,7 +219,9 @@ public struct TranscodePreset: Codable, Sendable, Identifiable, Hashable {
         audioCodec: AudioCodec,
         audioBitrate: String,
         container: String,
-        description: String
+        description: String,
+        resolution: TargetResolution? = nil,
+        encodeSpeed: EncodeSpeed = .medium
     ) {
         self.name = name
         self.videoCodec = videoCodec
@@ -108,6 +230,8 @@ public struct TranscodePreset: Codable, Sendable, Identifiable, Hashable {
         self.audioBitrate = audioBitrate
         self.container = container
         self.description = description
+        self.resolution = resolution
+        self.encodeSpeed = encodeSpeed
     }
 
     // MARK: - ffmpeg Argument Builder
@@ -128,7 +252,22 @@ public struct TranscodePreset: Codable, Sendable, Identifiable, Hashable {
 
         // Video codec and quality
         args.append(contentsOf: ["-c:v", videoCodec.ffmpegName])
-        args.append(contentsOf: ["-crf", String(crf)])
+
+        // Quality parameter: VideoToolbox uses -q:v (0-100, lower=better), software encoders use -crf
+        if videoCodec.usesQualityParam {
+            // Map CRF range (18-35) to VideoToolbox quality (35-75).
+            // Lower CRF = higher quality = lower q:v value.
+            let quality = max(35, min(75, 35 + (crf - 18) * 40 / 17))
+            args.append(contentsOf: ["-q:v", String(quality)])
+        } else {
+            args.append(contentsOf: ["-crf", String(crf)])
+            args.append(contentsOf: ["-preset", encodeSpeed.ffmpegValue])
+        }
+
+        // Resolution scaling (if set and not keepSame)
+        if let height = resolution?.heightValue {
+            args.append(contentsOf: ["-vf", "scale=-2:\(height)"])
+        }
 
         // Audio codec
         args.append(contentsOf: ["-c:a", audioCodec.ffmpegName])
@@ -138,19 +277,13 @@ public struct TranscodePreset: Codable, Sendable, Identifiable, Hashable {
             args.append(contentsOf: ["-b:a", audioBitrate])
         }
 
-        // Preset speed — "medium" is a balanced default for both x264 and x265
-        args.append(contentsOf: ["-preset", "medium"])
-
-        // MP4-specific: move moov atom to beginning for fast streaming start
+        // MP4-specific: move moov atom to beginning for fast streaming start + preserve metadata tags
         if container == "mp4" {
-            args.append(contentsOf: ["-movflags", "+faststart"])
+            args.append(contentsOf: ["-movflags", "+faststart+use_metadata_tags"])
         }
 
         // Copy all metadata streams
         args.append(contentsOf: ["-map_metadata", "0"])
-
-        // Copy creation time
-        args.append(contentsOf: ["-movflags", "use_metadata_tags"])
 
         // Output
         args.append(outputURL.path)
@@ -211,8 +344,48 @@ public extension TranscodePreset {
         description: "Optimized for screen recordings. Uses H.264 for broad compatibility."
     )
 
-    /// All built-in presets.
+    /// Custom preset placeholder — users configure codec, CRF, and resolution in the Optimizer UI.
+    static let custom = TranscodePreset(
+        name: "Custom",
+        videoCodec: .h265,
+        crf: 28,
+        audioCodec: .aac,
+        audioBitrate: "128k",
+        container: "mp4",
+        description: "User-defined codec, CRF, and resolution settings."
+    )
+
+    /// Build a custom preset with user-specified parameters.
+    static func makeCustom(
+        videoCodec: VideoCodec,
+        crf: Int,
+        resolution: TargetResolution,
+        encodeSpeed: EncodeSpeed = .medium
+    ) -> TranscodePreset {
+        TranscodePreset(
+            name: "Custom",
+            videoCodec: videoCodec,
+            crf: crf,
+            audioCodec: .aac,
+            audioBitrate: "128k",
+            container: "mp4",
+            description: "Custom: \(videoCodec.shortName) CRF \(crf)\(resolution != .keepSame ? " \(resolution.label)" : "")",
+            resolution: resolution,
+            encodeSpeed: encodeSpeed
+        )
+    }
+
+    /// All presets shown in the Optimizer UI (includes Custom).
     static let allPresets: [TranscodePreset] = [
+        .default,
+        .highQuality,
+        .smallFile,
+        .screenRecording,
+        .custom,
+    ]
+
+    /// Presets available for rules (excludes Custom — custom params are ephemeral).
+    static let rulesPresets: [TranscodePreset] = [
         .default,
         .highQuality,
         .smallFile,

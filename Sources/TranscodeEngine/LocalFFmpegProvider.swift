@@ -94,7 +94,7 @@ public final class LocalFFmpegProvider: TranscodeProvider, @unchecked Sendable {
 
         // Check exit code
         guard result.exitCode == 0 else {
-            let stderr = result.stderr.suffix(2000)  // Limit stderr length
+            let stderr = result.stderr.prefix(2000)  // Show beginning of stderr where errors appear
             throw TranscodeEngineError.transcodeFailed(
                 "ffmpeg exited with code \(result.exitCode): \(stderr)"
             )
@@ -169,8 +169,24 @@ public final class LocalFFmpegProvider: TranscodeProvider, @unchecked Sendable {
 
         let estimatedRatio = baseRatio * crfScale
 
+        // Account for resolution downscaling
+        var resolutionFactor = 1.0
+        if let targetHeight = preset.resolution?.heightValue,
+           let sourceHeight = metadata.height, sourceHeight > 0,
+           targetHeight < sourceHeight {
+            let sourceWidth = metadata.width ?? Int(Double(sourceHeight) * 16.0 / 9.0)
+            let sourcePixels = Double(sourceWidth * sourceHeight)
+            // Target width estimated from aspect ratio
+            let aspectRatio = Double(sourceWidth) / Double(sourceHeight)
+            let targetWidth = Double(targetHeight) * aspectRatio
+            let targetPixels = targetWidth * Double(targetHeight)
+            resolutionFactor = pow(targetPixels / sourcePixels, 0.85)
+        }
+
+        let finalRatio = estimatedRatio * resolutionFactor
+
         // Clamp ratio to reasonable bounds [0.05, 1.5]
-        let clampedRatio = min(max(estimatedRatio, 0.05), 1.5)
+        let clampedRatio = min(max(finalRatio, 0.05), 1.5)
 
         return Int64(Double(sourceSize) * clampedRatio)
     }
@@ -240,6 +256,77 @@ public final class LocalFFmpegProvider: TranscodeProvider, @unchecked Sendable {
         return nil
     }
 
+    // MARK: - Transcode with Progress
+
+    /// Progress-aware transcode that parses ffmpeg's `-progress pipe:1` output.
+    /// - Parameters:
+    ///   - input: Input video file URL.
+    ///   - output: Output video file URL.
+    ///   - preset: Transcode preset.
+    ///   - totalDuration: Total duration of the input video in seconds (for percentage calculation).
+    ///   - onProgress: Callback with (percentage 0-100, speed string like "2.5x", elapsed seconds).
+    /// - Returns: A `TranscodeResult`.
+    public func transcodeWithProgress(
+        input: URL,
+        output: URL,
+        preset: TranscodePreset,
+        totalDuration: Double?,
+        onProgress: @escaping @Sendable (Double, String?, TimeInterval) -> Void
+    ) async throws -> TranscodeResult {
+        guard !ffmpegPath.isEmpty, FileManager.default.fileExists(atPath: ffmpegPath) else {
+            throw TranscodeEngineError.ffmpegNotFound
+        }
+
+        let inputAttributes = try FileManager.default.attributesOfItem(atPath: input.path)
+        let inputFileSize = (inputAttributes[.size] as? Int64) ?? 0
+
+        // Build arguments with -progress pipe:1 for machine-readable progress on stdout
+        var arguments = preset.ffmpegArguments(inputURL: input, outputURL: output)
+        // Insert -progress pipe:1 after -y flag
+        if let yIndex = arguments.firstIndex(of: "-y") {
+            arguments.insert(contentsOf: ["-progress", "pipe:1"], at: yIndex + 1)
+        }
+
+        let startTime = Date()
+
+        let result = try await runProcessWithProgress(
+            executablePath: ffmpegPath,
+            arguments: arguments,
+            totalDuration: totalDuration,
+            startTime: startTime,
+            onProgress: onProgress
+        )
+
+        let elapsed = Date().timeIntervalSince(startTime)
+
+        guard result.exitCode == 0 else {
+            let stderr = result.stderr.suffix(2000)
+            throw TranscodeEngineError.transcodeFailed(
+                "ffmpeg exited with code \(result.exitCode): \(stderr)"
+            )
+        }
+
+        guard FileManager.default.fileExists(atPath: output.path) else {
+            throw TranscodeEngineError.outputFileMissing
+        }
+
+        let outputAttributes = try FileManager.default.attributesOfItem(atPath: output.path)
+        let outputFileSize = (outputAttributes[.size] as? Int64) ?? 0
+
+        guard outputFileSize > 0 else {
+            throw TranscodeEngineError.outputFileEmpty
+        }
+
+        return TranscodeResult(
+            outputURL: output,
+            outputFileSize: outputFileSize,
+            inputFileSize: inputFileSize,
+            spaceSaved: inputFileSize - outputFileSize,
+            transcodeDuration: elapsed,
+            success: true
+        )
+    }
+
     // MARK: - Process Execution
 
     /// Result of running an external process.
@@ -250,10 +337,6 @@ public final class LocalFFmpegProvider: TranscodeProvider, @unchecked Sendable {
     }
 
     /// Run an external process asynchronously using structured concurrency.
-    /// - Parameters:
-    ///   - executablePath: Full path to the executable.
-    ///   - arguments: Command-line arguments.
-    /// - Returns: A `ProcessResult` with exit code, stdout, and stderr.
     private func runProcess(
         executablePath: String,
         arguments: [String]
@@ -285,6 +368,78 @@ public final class LocalFFmpegProvider: TranscodeProvider, @unchecked Sendable {
             do {
                 try process.run()
             } catch {
+                continuation.resume(throwing: TranscodeEngineError.transcodeFailed(
+                    "Failed to launch process: \(error.localizedDescription)"
+                ))
+            }
+        }
+    }
+
+    /// Run a process and stream stdout for progress parsing.
+    private func runProcessWithProgress(
+        executablePath: String,
+        arguments: [String],
+        totalDuration: Double?,
+        startTime: Date,
+        onProgress: @escaping @Sendable (Double, String?, TimeInterval) -> Void
+    ) async throws -> ProcessResult {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executablePath)
+            process.arguments = arguments
+
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
+
+            // Track latest values from ffmpeg progress output
+            nonisolated(unsafe) var lastSpeed: String?
+            nonisolated(unsafe) var resumed = false
+
+            // Read stdout incrementally for progress parsing
+            stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+
+                for line in text.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("out_time_us="), let totalDuration, totalDuration > 0 {
+                        let valueStr = trimmed.replacingOccurrences(of: "out_time_us=", with: "")
+                        if let microseconds = Double(valueStr), microseconds > 0 {
+                            let seconds = microseconds / 1_000_000.0
+                            let percent = min(seconds / totalDuration * 100.0, 99.9)
+                            let elapsed = Date().timeIntervalSince(startTime)
+                            onProgress(percent, lastSpeed, elapsed)
+                        }
+                    } else if trimmed.hasPrefix("speed=") {
+                        let speedVal = trimmed.replacingOccurrences(of: "speed=", with: "")
+                        if speedVal != "N/A" {
+                            lastSpeed = speedVal
+                        }
+                    }
+                }
+            }
+
+            process.terminationHandler = { terminatedProcess in
+                stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: ProcessResult(
+                    exitCode: terminatedProcess.terminationStatus,
+                    stdout: "",
+                    stderr: stderr
+                ))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                guard !resumed else { return }
+                resumed = true
                 continuation.resume(throwing: TranscodeEngineError.transcodeFailed(
                     "Failed to launch process: \(error.localizedDescription)"
                 ))

@@ -7,6 +7,7 @@ import SwiftUI
 
 struct RulesEditorView: View {
     @StateObject private var viewModel = RulesEditorViewModel()
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +29,8 @@ struct RulesEditorView: View {
 
             statusBar
         }
+        .frame(minWidth: 700, idealWidth: 800, maxWidth: .infinity,
+               minHeight: 450, idealHeight: 560, maxHeight: .infinity)
         .onAppear {
             viewModel.loadRules()
         }
@@ -73,6 +76,11 @@ struct RulesEditorView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
+
+            Button("Done") {
+                dismiss()
+            }
+            .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, IVSpacing.lg)
         .padding(.vertical, IVSpacing.md)
@@ -627,7 +635,7 @@ private struct RuleEditorSheet: View {
 
             VStack(alignment: .leading, spacing: IVSpacing.sm) {
                 Picker("Preset", selection: $selectedPresetName) {
-                    ForEach(TranscodePreset.allPresets) { preset in
+                    ForEach(TranscodePreset.rulesPresets) { preset in
                         Text(preset.name).tag(preset.name)
                     }
                 }
@@ -635,7 +643,7 @@ private struct RuleEditorSheet: View {
                 .frame(maxWidth: 300)
                 .disabled(isBuiltIn)
 
-                if let preset = TranscodePreset.allPresets.first(where: { $0.name == selectedPresetName }) {
+                if let preset = TranscodePreset.rulesPresets.first(where: { $0.name == selectedPresetName }) {
                     HStack(spacing: IVSpacing.lg) {
                         presetDetailLabel("Codec", value: preset.videoCodec.label)
                         presetDetailLabel("CRF", value: "\(preset.crf)")

@@ -20,21 +20,39 @@ struct MainNavigationView: View {
         }
     }
 
-    @ViewBuilder
+    /// All detail views are kept alive in a ZStack so that in-progress scans,
+    /// upload state, and other view model state survive tab switches.
     private var detailContent: some View {
-        switch appState.selectedNavItem {
-        case .dashboard:
+        ZStack {
             DashboardView()
-        case .photosUpload:
+                .opacity(appState.selectedNavItem == .dashboard ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .dashboard)
+                .accessibilityHidden(appState.selectedNavItem != .dashboard)
+
             PhotosUploadView()
-        case .optimizer:
-            OptimizerView()
-        case .jobs:
+                .opacity(appState.selectedNavItem == .photosUpload ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .photosUpload)
+                .accessibilityHidden(appState.selectedNavItem != .photosUpload)
+
+            OptimizerContainerView()
+                .opacity(appState.selectedNavItem == .optimizer ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .optimizer)
+                .accessibilityHidden(appState.selectedNavItem != .optimizer)
+
             JobsView()
-        case .logs:
+                .opacity(appState.selectedNavItem == .jobs ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .jobs)
+                .accessibilityHidden(appState.selectedNavItem != .jobs)
+
             LogsView()
-        case .settings:
+                .opacity(appState.selectedNavItem == .logs ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .logs)
+                .accessibilityHidden(appState.selectedNavItem != .logs)
+
             SettingsView()
+                .opacity(appState.selectedNavItem == .settings ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .settings)
+                .accessibilityHidden(appState.selectedNavItem != .settings)
         }
     }
 

@@ -18,6 +18,11 @@ public final class OptimizerViewModel: ObservableObject {
     @Published var selectedPreset: TranscodePreset = .default
     @Published var selectedProvider: TranscodeProviderType = .local
 
+    // Custom preset parameters (used when selectedPreset == .custom)
+    @Published var customCodec: VideoCodec = .h265
+    @Published var customCRF: Int = 28
+    @Published var customResolution: TargetResolution = .keepSame
+
     // MARK: - UI State
 
     @Published var showInspector = false
@@ -125,6 +130,22 @@ public final class OptimizerViewModel: ObservableObject {
         ruleMatches.count
     }
 
+    var isCustomPreset: Bool {
+        selectedPreset.name == "Custom"
+    }
+
+    /// Returns the built-in preset as-is, or builds a custom preset from user parameters.
+    var effectivePreset: TranscodePreset {
+        if isCustomPreset {
+            return TranscodePreset.makeCustom(
+                videoCodec: customCodec,
+                crf: customCRF,
+                resolution: customResolution
+            )
+        }
+        return selectedPreset
+    }
+
     // MARK: - Init
 
     init(settings: AppSettings = .shared) {
@@ -227,7 +248,7 @@ public final class OptimizerViewModel: ObservableObject {
                         bitrate: asset.bitrate,
                         fileSize: fileSize
                     )
-                    let estimatedOutput = localProvider.estimateOutputSize(metadata: videoMeta, preset: self.selectedPreset)
+                    let estimatedOutput = localProvider.estimateOutputSize(metadata: videoMeta, preset: self.effectivePreset)
                     let estimatedSavings = fileSize - estimatedOutput
 
                     let candidate = TranscodeCandidate(
@@ -259,7 +280,7 @@ public final class OptimizerViewModel: ObservableObject {
                 estimatedTotalCost = CostLedger.shared.estimatedCostForCandidates(
                     allCandidates,
                     providerType: selectedProvider,
-                    preset: selectedPreset
+                    preset: effectivePreset
                 )
             } else {
                 estimatedTotalCost = 0
@@ -311,6 +332,13 @@ public final class OptimizerViewModel: ObservableObject {
 
     func startTranscoding() {
         guard !isProcessing, !selectedCandidateIDs.isEmpty else { return }
+
+        // Validate cloud provider has an API key
+        if selectedProvider != .local && !TranscodeEngine.isProviderConfigured(selectedProvider) {
+            errorMessage = "\(selectedProvider.label) API key is not configured. Go to Settings → Provider API Keys to add it."
+            return
+        }
+
         isProcessing = true
         processedCount = 0
         processingErrors = []
@@ -319,7 +347,7 @@ public final class OptimizerViewModel: ObservableObject {
         let total = selected.count
 
         LogManager.shared.info(
-            "Starting transcode batch: \(total) videos, preset=\(selectedPreset.name), provider=\(selectedProvider.label)",
+            "Starting transcode batch: \(total) videos, preset=\(effectivePreset.name), provider=\(selectedProvider.label)",
             category: .transcode
         )
         ActivityLogService.shared.log(
@@ -346,12 +374,13 @@ public final class OptimizerViewModel: ObservableObject {
                 do {
                     // Create transcode job in DB
                     let pool = try DatabaseManager.shared.writer()
+                    let preset = self.effectivePreset
                     var jobRecord = TranscodeJob(
                         immichAssetId: candidate.id,
                         provider: self.selectedProvider,
-                        targetCodec: self.selectedPreset.videoCodec.rawValue,
-                        targetCRF: self.selectedPreset.crf,
-                        targetContainer: self.selectedPreset.container
+                        targetCodec: preset.videoCodec.rawValue,
+                        targetCRF: preset.crf,
+                        targetContainer: preset.container
                     )
                     jobRecord.originalFilename = candidate.detail.originalFileName
                     jobRecord.originalFileSize = candidate.originalFileSize
@@ -399,6 +428,14 @@ public final class OptimizerViewModel: ObservableObject {
                     + (self.processingErrors.isEmpty ? "" : ", \(self.processingErrors.count) errors")
                 LogManager.shared.info(msg, category: .transcode)
                 ActivityLogService.shared.log(level: .info, category: .transcode, message: msg)
+
+                // Kick off the orchestrator to process pending jobs
+                if self.processedCount > 0 {
+                    TranscodeOrchestrator.shared.processPendingJobs(
+                        preset: self.effectivePreset,
+                        settings: self.settings
+                    )
+                }
             }
         }
     }

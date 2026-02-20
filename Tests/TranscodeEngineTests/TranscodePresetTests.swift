@@ -49,7 +49,12 @@ final class TranscodePresetTests: XCTestCase {
     // MARK: - All Presets
 
     func testAllPresetsCount() {
-        XCTAssertEqual(TranscodePreset.allPresets.count, 4, "Should have exactly 4 built-in presets")
+        XCTAssertEqual(TranscodePreset.allPresets.count, 5, "Should have exactly 5 presets (4 built-in + Custom)")
+    }
+
+    func testRulesPresetsExcludesCustom() {
+        XCTAssertEqual(TranscodePreset.rulesPresets.count, 4, "Rules presets should have 4 (no Custom)")
+        XCTAssertFalse(TranscodePreset.rulesPresets.contains(where: { $0.name == "Custom" }), "Custom should not be in rulesPresets")
     }
 
     func testAllPresetsContainExpectedNames() {
@@ -84,9 +89,16 @@ final class TranscodePresetTests: XCTestCase {
         XCTAssertTrue(args.contains("-i"), "Should include input flag")
         XCTAssertTrue(args.contains(input.path), "Should include input path")
         XCTAssertTrue(args.contains("-c:v"), "Should include video codec flag")
-        XCTAssertTrue(args.contains("libx265"), "Default preset should use libx265")
-        XCTAssertTrue(args.contains("-crf"), "Should include CRF flag")
-        XCTAssertTrue(args.contains("28"), "Default CRF should be 28")
+        // Encoder is resolved at runtime: libx265 or hevc_videotoolbox
+        let encoder = VideoCodec.h265.ffmpegName
+        XCTAssertTrue(args.contains(encoder), "Default preset should use resolved H.265 encoder: \(encoder)")
+        // Quality flag depends on encoder
+        if VideoCodec.h265.usesQualityParam {
+            XCTAssertTrue(args.contains("-q:v"), "VideoToolbox should use -q:v")
+        } else {
+            XCTAssertTrue(args.contains("-crf"), "Software encoder should use -crf")
+            XCTAssertTrue(args.contains("28"), "Default CRF should be 28")
+        }
         XCTAssertTrue(args.contains("-c:a"), "Should include audio codec flag")
         XCTAssertTrue(args.contains("aac"), "Should include AAC audio codec")
         XCTAssertTrue(args.contains("-b:a"), "Should include audio bitrate flag")
@@ -112,31 +124,38 @@ final class TranscodePresetTests: XCTestCase {
         let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
 
         XCTAssertTrue(args.contains("-movflags"), "MP4 container should include movflags")
-        XCTAssertTrue(args.contains("+faststart"), "Should include +faststart for MP4")
+        // Combined movflags: faststart + use_metadata_tags
+        XCTAssertTrue(args.contains("+faststart+use_metadata_tags"), "Should include combined movflags")
     }
 
-    func testFFmpegArgumentsContainsCRF() {
+    func testFFmpegArgumentsContainsQualityParam() {
         for preset in TranscodePreset.allPresets {
             let input = URL(fileURLWithPath: "/tmp/in.mov")
             let output = URL(fileURLWithPath: "/tmp/out.mp4")
             let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
 
-            guard let crfIndex = args.firstIndex(of: "-crf") else {
-                XCTFail("Preset \(preset.name) missing -crf argument")
-                continue
+            if preset.videoCodec.usesQualityParam {
+                XCTAssertTrue(args.contains("-q:v"), "Preset \(preset.name) with VideoToolbox should use -q:v")
+                XCTAssertFalse(args.contains("-crf"), "Preset \(preset.name) with VideoToolbox should NOT use -crf")
+            } else {
+                guard let crfIndex = args.firstIndex(of: "-crf") else {
+                    XCTFail("Preset \(preset.name) missing -crf argument")
+                    continue
+                }
+                let crfValue = args[crfIndex + 1]
+                XCTAssertEqual(crfValue, String(preset.crf), "CRF value should match preset for \(preset.name)")
             }
-            let crfValue = args[crfIndex + 1]
-            XCTAssertEqual(crfValue, String(preset.crf), "CRF value should match preset for \(preset.name)")
         }
     }
 
-    func testFFmpegArgumentsContainsPresetMedium() {
-        let preset = TranscodePreset.default
+    func testFFmpegArgumentsSoftwarePresetMedium() {
+        // H.264 always uses libx264 (software), so it should have -preset medium
+        let preset = TranscodePreset.screenRecording
         let input = URL(fileURLWithPath: "/tmp/in.mov")
         let output = URL(fileURLWithPath: "/tmp/out.mp4")
         let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
 
-        XCTAssertTrue(args.contains("-preset"), "Should include encoding preset flag")
+        XCTAssertTrue(args.contains("-preset"), "Software encoder should include -preset flag")
         XCTAssertTrue(args.contains("medium"), "Should use medium encoding speed")
     }
 
@@ -172,7 +191,10 @@ final class TranscodePresetTests: XCTestCase {
     // MARK: - VideoCodec
 
     func testVideoCodecH265FFmpegName() {
-        XCTAssertEqual(VideoCodec.h265.ffmpegName, "libx265")
+        // ffmpegName is resolved at runtime based on available encoders
+        let name = VideoCodec.h265.ffmpegName
+        XCTAssertTrue(name == "libx265" || name == "hevc_videotoolbox",
+                       "H.265 encoder should be libx265 or hevc_videotoolbox, got: \(name)")
         XCTAssertEqual(VideoCodec.h265.rawValue, "libx265")
     }
 
@@ -345,5 +367,172 @@ final class TranscodePresetTests: XCTestCase {
         let hqEstimate = provider.estimateOutputSize(metadata: metadata, preset: .highQuality)
 
         XCTAssertGreaterThan(hqEstimate, defaultEstimate, "High quality preset should produce larger estimate than default")
+    }
+
+    // MARK: - Custom Preset
+
+    func testCustomPresetValues() {
+        let preset = TranscodePreset.custom
+        XCTAssertEqual(preset.name, "Custom")
+        XCTAssertEqual(preset.videoCodec, .h265)
+        XCTAssertEqual(preset.crf, 28)
+        XCTAssertNil(preset.resolution, "Default custom preset should have nil resolution")
+    }
+
+    func testMakeCustomFactory() {
+        let preset = TranscodePreset.makeCustom(videoCodec: .h264, crf: 22, resolution: .p720)
+        XCTAssertEqual(preset.name, "Custom")
+        XCTAssertEqual(preset.videoCodec, .h264)
+        XCTAssertEqual(preset.crf, 22)
+        XCTAssertEqual(preset.resolution, .p720)
+        XCTAssertEqual(preset.audioCodec, .aac)
+        XCTAssertEqual(preset.container, "mp4")
+        XCTAssertTrue(preset.description.contains("H.264"), "Description should mention codec")
+        XCTAssertTrue(preset.description.contains("720p"), "Description should mention resolution")
+    }
+
+    func testMakeCustomKeepSameOmitsResolutionInDescription() {
+        let preset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 28, resolution: .keepSame)
+        XCTAssertFalse(preset.description.contains("Keep Same"), "keepSame should not appear in description")
+    }
+
+    // MARK: - TargetResolution
+
+    func testTargetResolutionHeightValues() {
+        XCTAssertNil(TargetResolution.keepSame.heightValue)
+        XCTAssertEqual(TargetResolution.p480.heightValue, 480)
+        XCTAssertEqual(TargetResolution.p720.heightValue, 720)
+        XCTAssertEqual(TargetResolution.p1080.heightValue, 1080)
+        XCTAssertEqual(TargetResolution.p4K.heightValue, 2160)
+    }
+
+    func testTargetResolutionCaseIterable() {
+        XCTAssertEqual(TargetResolution.allCases.count, 5)
+    }
+
+    // MARK: - ffmpegArguments with Resolution
+
+    func testFFmpegArgumentsWithResolution() {
+        let preset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 26, resolution: .p720)
+        let input = URL(fileURLWithPath: "/tmp/input.mov")
+        let output = URL(fileURLWithPath: "/tmp/output.mp4")
+        let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
+
+        XCTAssertTrue(args.contains("-vf"), "Should include -vf flag for resolution scaling")
+        XCTAssertTrue(args.contains("scale=-2:720"), "Should include scale filter with height 720")
+    }
+
+    func testFFmpegArgumentsKeepSameNoScaleFilter() {
+        let preset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 28, resolution: .keepSame)
+        let input = URL(fileURLWithPath: "/tmp/input.mov")
+        let output = URL(fileURLWithPath: "/tmp/output.mp4")
+        let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
+
+        XCTAssertFalse(args.contains("-vf"), "keepSame should NOT include -vf flag")
+    }
+
+    func testFFmpegArgumentsNilResolutionNoScaleFilter() {
+        // Built-in presets have nil resolution
+        let preset = TranscodePreset.default
+        let input = URL(fileURLWithPath: "/tmp/input.mov")
+        let output = URL(fileURLWithPath: "/tmp/output.mp4")
+        let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
+
+        XCTAssertFalse(args.contains("-vf"), "nil resolution should NOT include -vf flag")
+    }
+
+    func testFFmpegArguments4KResolution() {
+        let preset = TranscodePreset.makeCustom(videoCodec: .h264, crf: 20, resolution: .p4K)
+        let input = URL(fileURLWithPath: "/tmp/input.mov")
+        let output = URL(fileURLWithPath: "/tmp/output.mp4")
+        let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
+
+        XCTAssertTrue(args.contains("scale=-2:2160"), "Should include scale filter with height 2160 for 4K")
+    }
+
+    // MARK: - Estimate with Resolution Downscaling
+
+    func testEstimateOutputSizeWithResolutionDownscale() {
+        let provider = LocalFFmpegProvider()
+        let metadata = VideoMetadata(duration: 60.0, width: 3840, height: 2160, fileSize: 1_000_000_000)
+        let noScalePreset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 28, resolution: .keepSame)
+        let downscalePreset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 28, resolution: .p1080)
+
+        let noScaleEstimate = provider.estimateOutputSize(metadata: metadata, preset: noScalePreset)
+        let downscaleEstimate = provider.estimateOutputSize(metadata: metadata, preset: downscalePreset)
+
+        XCTAssertLessThan(downscaleEstimate, noScaleEstimate, "Downscaling 4K to 1080p should produce smaller estimate")
+    }
+
+    func testEstimateOutputSizeUpscaleIgnored() {
+        let provider = LocalFFmpegProvider()
+        let metadata = VideoMetadata(duration: 60.0, width: 1920, height: 1080, fileSize: 500_000_000)
+        let noScalePreset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 28, resolution: .keepSame)
+        let upscalePreset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 28, resolution: .p4K)
+
+        let noScaleEstimate = provider.estimateOutputSize(metadata: metadata, preset: noScalePreset)
+        let upscaleEstimate = provider.estimateOutputSize(metadata: metadata, preset: upscalePreset)
+
+        XCTAssertEqual(upscaleEstimate, noScaleEstimate, "Upscaling should not change estimate (target > source)")
+    }
+
+    // MARK: - EncodeSpeed
+
+    func testEncodeSpeedAllCases() {
+        XCTAssertEqual(EncodeSpeed.allCases.count, 9)
+    }
+
+    func testEncodeSpeedFFmpegValues() {
+        for speed in EncodeSpeed.allCases {
+            XCTAssertEqual(speed.ffmpegValue, speed.rawValue, "ffmpegValue should equal rawValue for \(speed)")
+        }
+    }
+
+    func testEncodeSpeedLabelsNotEmpty() {
+        for speed in EncodeSpeed.allCases {
+            XCTAssertFalse(speed.label.isEmpty, "Label should not be empty for \(speed)")
+            XCTAssertFalse(speed.hint.isEmpty, "Hint should not be empty for \(speed)")
+        }
+    }
+
+    func testEncodeSpeedIdentifiable() {
+        for speed in EncodeSpeed.allCases {
+            XCTAssertEqual(speed.id, speed.rawValue, "id should equal rawValue for \(speed)")
+        }
+    }
+
+    func testDefaultPresetUsesEncodeSpeedMedium() {
+        XCTAssertEqual(TranscodePreset.default.encodeSpeed, .medium)
+    }
+
+    func testMakeCustomWithEncodeSpeed() {
+        let preset = TranscodePreset.makeCustom(
+            videoCodec: .h264,
+            crf: 22,
+            resolution: .p1080,
+            encodeSpeed: .slow
+        )
+        XCTAssertEqual(preset.encodeSpeed, .slow)
+    }
+
+    func testFFmpegArgumentsUsesEncodeSpeed() {
+        let preset = TranscodePreset.makeCustom(
+            videoCodec: .h264,
+            crf: 24,
+            resolution: .keepSame,
+            encodeSpeed: .veryslow
+        )
+        let input = URL(fileURLWithPath: "/tmp/input.mov")
+        let output = URL(fileURLWithPath: "/tmp/output.mp4")
+        let args = preset.ffmpegArguments(inputURL: input, outputURL: output)
+
+        XCTAssertTrue(args.contains("-preset"), "Should include -preset flag")
+        XCTAssertTrue(args.contains("veryslow"), "Should use veryslow speed")
+        XCTAssertFalse(args.contains("medium"), "Should not contain medium when veryslow is set")
+    }
+
+    func testMakeCustomDefaultEncodeSpeedIsMedium() {
+        let preset = TranscodePreset.makeCustom(videoCodec: .h265, crf: 28, resolution: .keepSame)
+        XCTAssertEqual(preset.encodeSpeed, .medium, "Default encode speed should be medium")
     }
 }

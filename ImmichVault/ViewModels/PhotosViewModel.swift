@@ -172,7 +172,7 @@ public final class PhotosViewModel: ObservableObject {
 
     // MARK: - DB Reconciliation
 
-    /// Enriches scanned assets with DB state (never-reupload, already-uploaded).
+    /// Enriches scanned assets with DB state (never-reupload, already-uploaded, upload state).
     nonisolated private func reconcileWithDatabase(_ assets: [ScannedAsset]) async -> [ScannedAsset] {
         guard let pool = try? DatabaseManager.shared.reader() else { return assets }
 
@@ -204,7 +204,7 @@ public final class PhotosViewModel: ObservableObject {
                     }
                 }
 
-                return ScannedAsset(
+                var enriched = ScannedAsset(
                     localIdentifier: asset.localIdentifier,
                     assetType: asset.assetType,
                     metadata: asset.metadata,
@@ -212,8 +212,37 @@ public final class PhotosViewModel: ObservableObject {
                     isICloudPlaceholder: asset.isICloudPlaceholder,
                     isLocallyAvailable: asset.isLocallyAvailable
                 )
+                enriched.uploadState = record.state
+                return enriched
             }
         }) ?? assets
+    }
+
+    /// Refreshes upload states from DB without re-scanning Photos library.
+    func refreshUploadStates() {
+        guard !scannedAssets.isEmpty else { return }
+
+        Task {
+            let refreshed = await reconcileWithDatabase(scannedAssets.map { asset in
+                // Strip DB-derived skip reasons so reconciliation re-adds them fresh
+                var baseReasons = asset.skipReasons.filter { reason in
+                    switch reason {
+                    case .neverReuploadFlagged, .alreadyUploaded: return false
+                    default: return true
+                    }
+                }
+                _ = baseReasons // suppress unused warning
+                return ScannedAsset(
+                    localIdentifier: asset.localIdentifier,
+                    assetType: asset.assetType,
+                    metadata: asset.metadata,
+                    skipReasons: baseReasons,
+                    isICloudPlaceholder: asset.isICloudPlaceholder,
+                    isLocallyAvailable: asset.isLocallyAvailable
+                )
+            })
+            scannedAssets = refreshed
+        }
     }
 
     // MARK: - Per-Asset Actions
@@ -292,6 +321,7 @@ public final class PhotosViewModel: ObservableObject {
         guard !included.isEmpty else { return }
 
         var queued = 0
+        var alreadyDone = 0
         var failed = 0
 
         do {
@@ -299,6 +329,7 @@ public final class PhotosViewModel: ObservableObject {
             try pool.write { db in
                 for asset in included {
                     do {
+                        // Upsert: insert if new
                         if try AssetRecord.fetchByIdentifier(asset.localIdentifier, db: db) == nil {
                             var record = AssetRecord(
                                 localIdentifier: asset.localIdentifier,
@@ -314,9 +345,28 @@ public final class PhotosViewModel: ObservableObject {
                             try record.insert(db)
                         }
 
-                        let current = try AssetRecord.fetchByIdentifier(asset.localIdentifier, db: db)
-                        if current?.state == .idle {
-                            try StateMachine.shared.transition(asset.localIdentifier, to: .queuedForHash, detail: "Queued all from scan", db: db)
+                        guard let current = try AssetRecord.fetchByIdentifier(asset.localIdentifier, db: db) else {
+                            failed += 1
+                            continue
+                        }
+
+                        // Skip assets that are already uploaded or have never-reupload flag
+                        if current.state == .doneUploaded || current.neverReuploadFlag {
+                            alreadyDone += 1
+                            continue
+                        }
+
+                        // Queue from idle or retryable-failed states
+                        if current.state == .idle || current.state == .failedRetryable {
+                            try StateMachine.shared.transition(
+                                asset.localIdentifier,
+                                to: .queuedForHash,
+                                detail: "Queued from Upload All",
+                                db: db
+                            )
+                            queued += 1
+                        } else if current.state.isQueued || current.state.isActive {
+                            // Already queued or in progress — count as queued
                             queued += 1
                         }
                     } catch {
@@ -326,10 +376,16 @@ public final class PhotosViewModel: ObservableObject {
             }
         } catch {
             errorMessage = "Failed to queue assets: \(error.localizedDescription)"
+            LogManager.shared.error("Failed to queue assets: \(error.localizedDescription)", category: .upload)
+            ActivityLogService.shared.log(level: .error, category: .upload, message: "Failed to queue assets: \(error.localizedDescription)")
             return
         }
 
-        let msg = "Queued \(queued) assets for upload" + (failed > 0 ? " (\(failed) failed)" : "")
+        var parts: [String] = []
+        if queued > 0 { parts.append("\(queued) queued") }
+        if alreadyDone > 0 { parts.append("\(alreadyDone) already uploaded") }
+        if failed > 0 { parts.append("\(failed) failed to queue") }
+        let msg = "Upload All: \(parts.joined(separator: ", "))"
         LogManager.shared.info(msg, category: .upload)
         ActivityLogService.shared.log(level: .info, category: .upload, message: msg)
     }
@@ -343,7 +399,7 @@ public final class PhotosViewModel: ObservableObject {
         uploadError = nil
         uploadEngine.start(settings: settings)
 
-        // Observe upload engine state
+        // Observe upload engine state and refresh when done
         Task {
             while uploadEngine.isRunning {
                 uploadProgress = uploadEngine.currentProgress
@@ -353,6 +409,9 @@ public final class PhotosViewModel: ObservableObject {
             isUploading = false
             uploadProgress = nil
             uploadError = uploadEngine.lastError
+
+            // Refresh asset statuses from DB so UI reflects upload results
+            refreshUploadStates()
         }
     }
 
@@ -364,8 +423,35 @@ public final class PhotosViewModel: ObservableObject {
 
     /// Uploads a single asset immediately (Upload Now context action).
     func uploadNow(_ assetID: String) {
+        guard let asset = scannedAssets.first(where: { $0.localIdentifier == assetID }) else { return }
+
+        // Ensure DB record exists before triggering upload
+        do {
+            let pool = try DatabaseManager.shared.writer()
+            try pool.write { db in
+                if try AssetRecord.fetchByIdentifier(assetID, db: db) == nil {
+                    var record = AssetRecord(
+                        localIdentifier: assetID,
+                        assetType: asset.assetType,
+                        state: .idle
+                    )
+                    record.originalFilename = asset.metadata.originalFilename
+                    record.dateTaken = asset.metadata.creationDate
+                    record.hasGPS = asset.metadata.hasGPS
+                    record.width = asset.metadata.width
+                    record.height = asset.metadata.height
+                    record.duration = asset.metadata.duration
+                    try record.insert(db)
+                }
+            }
+        } catch {
+            errorMessage = "Failed to prepare asset for upload: \(error.localizedDescription)"
+            return
+        }
+
         Task {
             await uploadEngine.uploadSingle(assetID, settings: settings)
+            refreshUploadStates()
         }
     }
 

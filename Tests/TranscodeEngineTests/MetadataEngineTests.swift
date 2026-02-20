@@ -145,18 +145,47 @@ final class MetadataEngineTests: XCTestCase {
 
     // MARK: - Metadata Validation: Rotation Mismatch (Critical)
 
-    func testValidateMetadataRotationMismatch() {
-        let source = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 90)
-        let output = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 0)
+    func testValidateMetadataRotationMismatchNonAutoRotated() {
+        // 180° rotation with same dimensions but different rotation is a real mismatch
+        let source = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 180)
+        let output = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 90)
         let result = MetadataEngine.validateMetadata(source: source, output: output)
-        XCTAssertFalse(result.isValid, "Rotation mismatch should fail validation")
+        XCTAssertFalse(result.isValid, "Non-auto-rotation mismatch should fail validation")
         XCTAssertTrue(
             result.mismatches.contains { $0.field == "rotation" && $0.severity == .critical },
             "Should have a critical rotation mismatch"
         )
     }
 
-    // MARK: - Metadata Validation: GPS Lost (Warning, Not Critical)
+    func testValidateMetadataAutoRotation90() {
+        // Source: 1920x1080 with 90° rotation -> Output: 1080x1920 with 0° = valid auto-rotation
+        let source = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 90)
+        let output = VideoMetadata(duration: 60.0, width: 1080, height: 1920, rotation: 0)
+        let result = MetadataEngine.validateMetadata(source: source, output: output)
+        XCTAssertTrue(result.isValid, "Auto-rotation (90°) with swapped dimensions should pass validation")
+        XCTAssertFalse(
+            result.mismatches.contains { $0.severity == .critical },
+            "Should have no critical mismatches for valid auto-rotation"
+        )
+    }
+
+    func testValidateMetadataAutoRotation270() {
+        // Source: 1920x1080 with 270° rotation -> Output: 1080x1920 with 0° = valid auto-rotation
+        let source = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 270)
+        let output = VideoMetadata(duration: 60.0, width: 1080, height: 1920, rotation: 0)
+        let result = MetadataEngine.validateMetadata(source: source, output: output)
+        XCTAssertTrue(result.isValid, "Auto-rotation (270°) with swapped dimensions should pass validation")
+    }
+
+    func testValidateMetadataAutoRotationWrongDimensions() {
+        // Source: 1920x1080 with 90° rotation -> Output: 1280x720 with 0° = wrong dimensions
+        let source = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 90)
+        let output = VideoMetadata(duration: 60.0, width: 1280, height: 720, rotation: 0)
+        let result = MetadataEngine.validateMetadata(source: source, output: output)
+        XCTAssertFalse(result.isValid, "Auto-rotation with wrong dimensions should fail")
+    }
+
+    // MARK: - Metadata Validation: GPS Lost (Critical — blocks replacement)
 
     func testValidateMetadataGPSLost() {
         let source = VideoMetadata(
@@ -165,11 +194,28 @@ final class MetadataEngineTests: XCTestCase {
         )
         let output = VideoMetadata(duration: 60.0, width: 1920, height: 1080)
         let result = MetadataEngine.validateMetadata(source: source, output: output)
-        // GPS loss is a warning, not critical -- should still be valid
-        XCTAssertTrue(result.isValid, "GPS loss should be a warning, not block replacement")
+        // GPS loss is critical -- must block replacement to prevent data loss
+        XCTAssertFalse(result.isValid, "GPS loss must block replacement")
         XCTAssertTrue(
-            result.mismatches.contains { $0.severity == .warning },
-            "Should have a warning-level mismatch for GPS loss"
+            result.mismatches.contains { $0.field == "gps" && $0.severity == .critical },
+            "Should have a critical mismatch for GPS loss"
+        )
+    }
+
+    func testValidateMetadataGPSPreserved() {
+        let source = VideoMetadata(
+            duration: 60.0, width: 1920, height: 1080,
+            gpsLatitude: 37.7749, gpsLongitude: -122.4194
+        )
+        let output = VideoMetadata(
+            duration: 60.0, width: 1920, height: 1080,
+            gpsLatitude: 37.7749, gpsLongitude: -122.4194
+        )
+        let result = MetadataEngine.validateMetadata(source: source, output: output)
+        XCTAssertTrue(result.isValid, "Matching GPS should pass validation")
+        XCTAssertFalse(
+            result.mismatches.contains { $0.field == "gps" },
+            "Should have no GPS mismatch when coordinates match"
         )
     }
 
@@ -320,12 +366,13 @@ final class MetadataEngineTests: XCTestCase {
     // MARK: - Multiple Mismatches
 
     func testValidateMetadataMultipleCritical() {
+        // 90° -> 0° is valid auto-rotation, but wrong dimensions + duration mismatch = 2 critical
         let source = VideoMetadata(duration: 60.0, width: 1920, height: 1080, rotation: 90)
         let output = VideoMetadata(duration: 50.0, width: 1280, height: 720, rotation: 0)
         let result = MetadataEngine.validateMetadata(source: source, output: output)
         XCTAssertFalse(result.isValid)
         let criticalCount = result.mismatches.filter { $0.severity == .critical }.count
-        XCTAssertGreaterThanOrEqual(criticalCount, 3, "Should have at least 3 critical mismatches (duration, resolution, rotation)")
+        XCTAssertGreaterThanOrEqual(criticalCount, 2, "Should have at least 2 critical mismatches (duration, resolution)")
     }
 
     // MARK: - Nil Source/Output Fields

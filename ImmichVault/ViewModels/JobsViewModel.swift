@@ -1,10 +1,12 @@
 import Foundation
 import SwiftUI
+import Combine
 import GRDB
 
 // MARK: - Jobs View Model
 // Drives the Jobs screen: loads transcode jobs from the database,
 // supports filtering by state, and provides retry/cancel actions.
+// Auto-refreshes while the orchestrator is running.
 
 @MainActor
 public final class JobsViewModel: ObservableObject {
@@ -21,6 +23,8 @@ public final class JobsViewModel: ObservableObject {
     // MARK: - Dependencies
 
     private let orchestrator = TranscodeOrchestrator.shared
+    private var refreshTimer: Timer?
+    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Computed
 
@@ -81,12 +85,47 @@ public final class JobsViewModel: ObservableObject {
 
     // MARK: - Init
 
-    init() {}
+    init() {
+        // Auto-refresh when orchestrator running state changes
+        orchestrator.$isRunning
+            .removeDuplicates()
+            .sink { [weak self] isRunning in
+                if isRunning {
+                    self?.startAutoRefresh()
+                } else {
+                    self?.stopAutoRefresh()
+                    self?.loadJobs()  // Final refresh when done
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Auto-Refresh
+
+    private func startAutoRefresh() {
+        guard refreshTimer == nil else { return }
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.loadJobs()
+            }
+        }
+    }
+
+    private func stopAutoRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    func cleanup() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
 
     // MARK: - Load Jobs
 
     func loadJobs() {
-        isLoading = true
+        let wasEmpty = jobs.isEmpty
+        if wasEmpty { isLoading = true }
         errorMessage = nil
 
         do {
@@ -109,7 +148,8 @@ public final class JobsViewModel: ObservableObject {
 
     func retryJob(_ id: String) {
         Task {
-            await orchestrator.retryJob(id)
+            let settings = AppSettings.shared
+            await orchestrator.retryJob(id, settings: settings)
             loadJobs()
         }
     }
@@ -118,6 +158,36 @@ public final class JobsViewModel: ObservableObject {
         Task {
             await orchestrator.cancelJob(id)
             loadJobs()
+        }
+    }
+
+    /// Number of finished (non-active) jobs that can be cleared.
+    var finishedJobCount: Int {
+        jobs.filter { $0.state.isTerminal || $0.state == .failedRetryable }.count
+    }
+
+    /// Deletes all finished jobs (completed, failed, cancelled) from the database.
+    func clearFinishedJobs() {
+        do {
+            let pool = try DatabaseManager.shared.writer()
+            let terminalStates: [TranscodeState] = [
+                .completed, .failedPermanent, .failedRetryable, .cancelled
+            ]
+            let stateValues = terminalStates.map { $0.rawValue }
+            try pool.write { db in
+                try TranscodeJob
+                    .filter(stateValues.contains(Column("state")))
+                    .deleteAll(db)
+            }
+            if let selected = selectedJobID,
+               jobs.first(where: { $0.id == selected })?.state.isTerminal == true ||
+               jobs.first(where: { $0.id == selected })?.state == .failedRetryable {
+                selectedJobID = nil
+            }
+            loadJobs()
+            LogManager.shared.info("Cleared finished transcode jobs", category: .transcode)
+        } catch {
+            errorMessage = "Failed to clear jobs: \(error.localizedDescription)"
         }
     }
 }

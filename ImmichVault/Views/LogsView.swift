@@ -5,6 +5,7 @@ import SwiftUI
 
 struct LogsView: View {
     @StateObject private var viewModel = LogsViewModel()
+    @EnvironmentObject var appState: AppState
     @State private var showExportMenu = false
 
     var body: some View {
@@ -30,6 +31,11 @@ struct LogsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { viewModel.loadLogs() }
+        .onChange(of: appState.selectedNavItem) { _ in
+            if appState.selectedNavItem == .logs {
+                viewModel.loadLogs()
+            }
+        }
     }
 
     // MARK: - Toolbar

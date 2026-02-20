@@ -20,6 +20,9 @@ public final class TranscodeOrchestrator: ObservableObject {
     @Published public var jobsCompleted: Int = 0
     @Published public var totalSpaceSaved: Int64 = 0
 
+    /// Per-job progress: jobId -> progress info. Updated in real time during ffmpeg transcoding.
+    @Published public var activeJobProgress: [String: JobProgress] = [:]
+
     // MARK: - Dependencies
 
     private let client = ImmichClient()
@@ -40,7 +43,66 @@ public final class TranscodeOrchestrator: ObservableObject {
             .appendingPathComponent("ImmichVault_transcode", isDirectory: true)
     }()
 
-    private init() {}
+    private init() {
+        // Recover any jobs stuck in active states from a previous session
+        Task {
+            await self.recoverStaleJobs()
+        }
+    }
+
+    // MARK: - Stale Job Recovery
+
+    /// Resets jobs stuck in active states (downloading, transcoding, validating, replacing)
+    /// back to failedRetryable so they can be retried. This handles the case where the app
+    /// was quit or crashed while jobs were in progress.
+    public func recoverStaleJobs() async {
+        do {
+            let pool = try DatabaseManager.shared.writer()
+            let recovered = try await pool.write { db -> Int in
+                let activeStates = [
+                    TranscodeState.downloading,
+                    .transcoding,
+                    .validatingMetadata,
+                    .replacing
+                ].map(\.rawValue)
+
+                let staleJobs = try TranscodeJob
+                    .filter(activeStates.contains(Column("state")))
+                    .fetchAll(db)
+
+                guard !staleJobs.isEmpty else { return 0 }
+
+                for var job in staleJobs {
+                    job.state = .failedRetryable
+                    job.lastError = "Job interrupted (app was closed during processing)"
+                    job.lastErrorAt = Date()
+                    job.updatedAt = Date()
+                    try job.update(db)
+
+                    let logEntry = ActivityLogRecord(
+                        level: "warning",
+                        category: "transcode",
+                        message: "Transcode job \(job.id.prefix(8)): recovered from stale \(job.state.label) state"
+                    )
+                    try logEntry.insert(db)
+                }
+
+                return staleJobs.count
+            }
+
+            if recovered > 0 {
+                LogManager.shared.info(
+                    "Recovered \(recovered) stale transcode job(s) from previous session",
+                    category: .transcode
+                )
+            }
+        } catch {
+            LogManager.shared.error(
+                "Failed to recover stale jobs: \(error.localizedDescription)",
+                category: .transcode
+            )
+        }
+    }
 
     // MARK: - Discover Candidates
 
@@ -233,6 +295,44 @@ public final class TranscodeOrchestrator: ObservableObject {
         )
     }
 
+    // MARK: - Process Pending Jobs (from OptimizerViewModel)
+
+    /// Processes all pending transcode jobs in the database.
+    /// Called after the OptimizerViewModel creates job records via "Queue Selected".
+    public func processPendingJobs(preset: TranscodePreset, settings: AppSettings) {
+        guard !isRunning else { return }
+        isRunning = true
+        lastError = nil
+        jobsCompleted = 0
+        totalSpaceSaved = 0
+
+        let log = LogManager.shared
+        let serverURL = settings.immichServerURL
+        let maxConcurrent = settings.maxConcurrentTranscodes
+
+        log.info("Processing pending transcode jobs", category: .transcode)
+
+        processTask = Task {
+            await self.processAllJobs(
+                preset: preset,
+                serverURL: serverURL,
+                maxConcurrent: maxConcurrent
+            )
+
+            await self.refreshStats()
+
+            self.isRunning = false
+            self.currentProgress = nil
+
+            log.info("Pending job processing finished: \(self.jobsCompleted) completed", category: .transcode)
+            ActivityLogService.shared.log(
+                level: .info,
+                category: .transcode,
+                message: "Transcode processing finished: \(self.jobsCompleted) completed, \(TranscodeResult.formatBytes(self.totalSpaceSaved)) saved"
+            )
+        }
+    }
+
     // MARK: - Scheduled Processing (from OptimizerScheduler)
 
     /// Processes pending jobs created by the optimizer scheduler.
@@ -277,23 +377,41 @@ public final class TranscodeOrchestrator: ObservableObject {
 
     // MARK: - Retry / Cancel Individual Jobs
 
-    /// Retries a failed-retryable job by transitioning it back to pending.
-    public func retryJob(_ jobId: String) async {
+    /// Retries a failed-retryable job by transitioning it back to pending and starting processing.
+    public func retryJob(_ jobId: String, settings: AppSettings? = nil) async {
         let log = LogManager.shared
         do {
             let pool = try DatabaseManager.shared.writer()
-            try await pool.write { db in
+            let job = try await pool.write { db -> TranscodeJob? in
                 guard var job = try TranscodeJob.fetchById(jobId, db: db) else {
                     log.warning("Retry requested for unknown job: \(jobId)", category: .transcode)
-                    return
+                    return nil
                 }
                 guard job.state == .failedRetryable else {
                     log.warning("Cannot retry job \(jobId): state is \(job.state.label)", category: .transcode)
-                    return
+                    return nil
                 }
                 try TranscodeStateMachine.transition(&job, to: .pending, db: db)
+                return job
             }
+
+            guard let job else { return }
             log.info("Job \(jobId.prefix(8)) queued for retry", category: .transcode)
+
+            // Auto-start processing if not already running
+            if !isRunning, let settings {
+                let codec = VideoCodec(rawValue: job.targetCodec) ?? .h265
+                let preset = TranscodePreset(
+                    name: "Retry",
+                    videoCodec: codec,
+                    crf: job.targetCRF,
+                    audioCodec: .aac,
+                    audioBitrate: "128k",
+                    container: job.targetContainer,
+                    description: "Reconstructed preset for retry"
+                )
+                processPendingJobs(preset: preset, settings: settings)
+            }
         } catch {
             log.error("Failed to retry job \(jobId): \(error.localizedDescription)", category: .transcode)
             lastError = error.localizedDescription
@@ -485,12 +603,11 @@ public final class TranscodeOrchestrator: ObservableObject {
                 try TranscodeStateMachine.transition(&j, to: .downloading, db: db)
             }
 
+            let downloadStart = Date()
             await MainActor.run {
-                self.currentProgress = TranscodeProgress(
-                    phase: .downloading,
-                    currentJob: self.jobsCompleted,
-                    totalJobs: self.jobsCompleted + 1,
-                    currentJobName: filename
+                self.activeJobProgress[jobId] = JobProgress(
+                    percent: 0, speed: nil,
+                    elapsed: 0, phase: "Downloading"
                 )
             }
 
@@ -500,11 +617,22 @@ public final class TranscodeOrchestrator: ObservableObject {
             let sourceFilename = sourceExtension.isEmpty ? "source.mp4" : "source.\(sourceExtension)"
             let sourceURL = jobDir.appendingPathComponent(sourceFilename)
 
+            let capturedJobId = jobId
             _ = try await client.downloadAssetOriginal(
                 immichAssetId: assetId,
                 destinationURL: sourceURL,
                 serverURL: serverURL,
-                apiKey: apiKey
+                apiKey: apiKey,
+                onProgress: { bytesReceived, totalBytes in
+                    let percent = Double(bytesReceived) / Double(totalBytes) * 100.0
+                    let elapsed = Date().timeIntervalSince(downloadStart)
+                    Task { @MainActor in
+                        self.activeJobProgress[capturedJobId] = JobProgress(
+                            percent: min(percent, 99.9), speed: nil,
+                            elapsed: elapsed, phase: "Downloading"
+                        )
+                    }
+                }
             )
 
             guard fm.fileExists(atPath: sourceURL.path) else {
@@ -521,11 +649,9 @@ public final class TranscodeOrchestrator: ObservableObject {
             }
 
             await MainActor.run {
-                self.currentProgress = TranscodeProgress(
-                    phase: .transcoding,
-                    currentJob: self.jobsCompleted,
-                    totalJobs: self.jobsCompleted + 1,
-                    currentJobName: filename
+                self.activeJobProgress[jobId] = JobProgress(
+                    percent: 0, speed: nil,
+                    elapsed: 0, phase: "Transcoding"
                 )
             }
 
@@ -535,7 +661,6 @@ public final class TranscodeOrchestrator: ObservableObject {
 
             // Store provider job ID if using a cloud provider
             if let cloudProv = activeProvider as? any CloudTranscodeProvider {
-                // Estimate and store cost before starting
                 let duration = job.originalDuration ?? 60.0
                 let fileSize = job.originalFileSize ?? 0
                 let estimatedCost = cloudProv.estimateCost(
@@ -554,11 +679,32 @@ public final class TranscodeOrchestrator: ObservableObject {
             let outputFilename = "output.\(preset.container)"
             let outputURL = jobDir.appendingPathComponent(outputFilename)
 
-            let transcodeResult = try await activeProvider.transcode(
-                input: sourceURL,
-                output: outputURL,
-                preset: preset
-            )
+            // Use progress-aware transcode for local ffmpeg
+            let transcodeResult: TranscodeResult
+            if let localProvider = activeProvider as? LocalFFmpegProvider {
+                let totalDuration = job.originalDuration
+                let capturedJobId = jobId
+                transcodeResult = try await localProvider.transcodeWithProgress(
+                    input: sourceURL,
+                    output: outputURL,
+                    preset: preset,
+                    totalDuration: totalDuration,
+                    onProgress: { percent, speed, elapsed in
+                        Task { @MainActor in
+                            self.activeJobProgress[capturedJobId] = JobProgress(
+                                percent: percent, speed: speed,
+                                elapsed: elapsed, phase: "Transcoding"
+                            )
+                        }
+                    }
+                )
+            } else {
+                transcodeResult = try await activeProvider.transcode(
+                    input: sourceURL,
+                    output: outputURL,
+                    preset: preset
+                )
+            }
 
             // For cloud providers, record actual cost (same as estimate for now)
             if let cloudProv = activeProvider as? any CloudTranscodeProvider {
@@ -593,6 +739,11 @@ public final class TranscodeOrchestrator: ObservableObject {
                     totalJobs: self.jobsCompleted + 1,
                     currentJobName: filename
                 )
+                self.activeJobProgress[jobId] = JobProgress(
+                    percent: 100, speed: nil,
+                    elapsed: Date().timeIntervalSince(downloadStart),
+                    phase: "Validating"
+                )
             }
 
             log.info("Validating metadata for job \(jobId.prefix(8))", category: .metadata)
@@ -602,27 +753,93 @@ public final class TranscodeOrchestrator: ObservableObject {
             let localProvider = TranscodeEngine.local
             let ffprobePath = localProvider.ffprobePath
 
-            let sourceMetadata = try await MetadataEngine.extractMetadata(
+            var sourceMetadata = try await MetadataEngine.extractMetadata(
                 from: sourceURL,
                 ffprobePath: ffprobePath
             )
 
-            // Apply metadata from source to transcoded output
+            // Enrich sourceMetadata with exiftool GPS if ffprobe missed it.
+            // ffprobe frequently can't read GPS from QuickTime mdta atoms.
+            if !sourceMetadata.hasGPS {
+                let exiftoolPath = MetadataEngine.resolveExifToolPath()
+                if !exiftoolPath.isEmpty {
+                    let exifTags = (try? await MetadataEngine.extractExifToolTags(
+                        from: sourceURL, exiftoolPath: exiftoolPath
+                    )) ?? [:]
+                    if let latStr = exifTags["GPSLatitude"],
+                       let lonStr = exifTags["GPSLongitude"],
+                       let lat = Double(latStr), let lon = Double(lonStr) {
+                        sourceMetadata.gpsLatitude = lat
+                        sourceMetadata.gpsLongitude = lon
+                        log.info("Validation: GPS recovered via exiftool: \(lat), \(lon)", category: .metadata)
+                    }
+                }
+            }
+
+            // Fetch GPS from Immich API as ultimate fallback — some files have no GPS
+            // embedded but Immich has it from manual geo-tagging, sidecars, or original upload.
+            var immichLatitude: Double?
+            var immichLongitude: Double?
+            if let detail = try? await client.getAssetDetails(
+                immichAssetId: assetId, serverURL: serverURL, apiKey: apiKey
+            ) {
+                immichLatitude = detail.latitude
+                immichLongitude = detail.longitude
+
+                // Enrich source metadata if file had no GPS
+                if !sourceMetadata.hasGPS, let lat = immichLatitude, let lon = immichLongitude {
+                    sourceMetadata.gpsLatitude = lat
+                    sourceMetadata.gpsLongitude = lon
+                    log.info("Validation: GPS recovered via Immich API: \(lat), \(lon)", category: .metadata)
+                }
+            }
+
+            // Apply metadata from source to transcoded output (including explicit GPS injection)
             let ffmpegPath = localProvider.ffmpegPath
             let metaAppliedURL = try await MetadataEngine.applyMetadata(
                 from: sourceURL,
                 to: outputURL,
-                ffmpegPath: ffmpegPath
+                ffmpegPath: ffmpegPath,
+                ffprobePath: ffprobePath,
+                fallbackLatitude: immichLatitude,
+                fallbackLongitude: immichLongitude
             )
 
-            let outputMetadata = try await MetadataEngine.extractMetadata(
+            var outputMetadata = try await MetadataEngine.extractMetadata(
                 from: metaAppliedURL,
                 ffprobePath: ffprobePath
             )
 
+            // Enrich output metadata with exiftool GPS if ffprobe missed it
+            if !outputMetadata.hasGPS {
+                let exiftoolPath = MetadataEngine.resolveExifToolPath()
+                if !exiftoolPath.isEmpty {
+                    let exifTags = (try? await MetadataEngine.extractExifToolTags(
+                        from: metaAppliedURL, exiftoolPath: exiftoolPath
+                    )) ?? [:]
+                    if let latStr = exifTags["GPSLatitude"],
+                       let lonStr = exifTags["GPSLongitude"],
+                       let lat = Double(latStr), let lon = Double(lonStr) {
+                        outputMetadata.gpsLatitude = lat
+                        outputMetadata.gpsLongitude = lon
+                        log.debug("Validation: output GPS confirmed via exiftool: \(lat), \(lon)", category: .metadata)
+                    }
+                }
+            }
+
+            // If the preset specifies a target resolution (not keepSame), resolution changes
+            // are intentional and should not block the replacement.
+            let resolutionChangeIntended: Bool
+            if let targetRes = preset.resolution, targetRes != .keepSame {
+                resolutionChangeIntended = true
+            } else {
+                resolutionChangeIntended = false
+            }
+
             let validation = MetadataEngine.validateMetadata(
                 source: sourceMetadata,
-                output: outputMetadata
+                output: outputMetadata,
+                allowResolutionChange: resolutionChangeIntended
             )
 
             // Store validation details
@@ -650,12 +867,25 @@ public final class TranscodeOrchestrator: ObservableObject {
                     )
                 }
 
+                // Log each mismatch individually for full visibility in the activity log
+                for mismatch in validation.mismatches {
+                    let level: LogLevel = mismatch.severity == .critical ? .error : .warning
+                    ActivityLogService.shared.log(
+                        level: level,
+                        category: .transcode,
+                        message: "Job \(jobId.prefix(8)) validation [\(mismatch.severity.rawValue.uppercased())]: \(mismatch.field) — expected \(mismatch.expected), got \(mismatch.actual)"
+                    )
+                }
+
                 ActivityLogService.shared.log(
                     level: .error,
                     category: .transcode,
                     message: "Job \(jobId.prefix(8)) failed: metadata validation did not pass. Asset NOT replaced."
                 )
 
+                await MainActor.run {
+                    self.activeJobProgress.removeValue(forKey: jobId)
+                }
                 return
             }
 
@@ -677,9 +907,25 @@ public final class TranscodeOrchestrator: ObservableObject {
                     totalJobs: self.jobsCompleted + 1,
                     currentJobName: filename
                 )
+                self.activeJobProgress[jobId] = JobProgress(
+                    percent: 100, speed: nil,
+                    elapsed: Date().timeIntervalSince(downloadStart),
+                    phase: "Replacing"
+                )
             }
 
             log.info("Replacing asset \(assetId) for job \(jobId.prefix(8))", category: .transcode)
+
+            // Fetch original creation date from Immich for the replace request
+            var originalDate: Date? = nil
+            if let detail = try? await client.getAssetDetails(
+                immichAssetId: assetId, serverURL: serverURL, apiKey: apiKey
+            ), let dateStr = detail.dateTimeOriginal {
+                let iso = ISO8601DateFormatter()
+                iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                originalDate = iso.date(from: dateStr)
+                    ?? ISO8601DateFormatter().date(from: dateStr)
+            }
 
             // Read the metadata-applied output file
             let outputData = try Data(contentsOf: metaAppliedURL)
@@ -690,7 +936,8 @@ public final class TranscodeOrchestrator: ObservableObject {
                 fileData: outputData,
                 filename: replaceFilename,
                 serverURL: serverURL,
-                apiKey: apiKey
+                apiKey: apiKey,
+                fileCreatedAt: originalDate
             )
 
             // --- Phase 5: Completed ---
@@ -714,14 +961,18 @@ public final class TranscodeOrchestrator: ObservableObject {
                 message: "Job \(jobId.prefix(8)) completed: \(filename) \(transcodeResult.summaryDescription)"
             )
 
-            // Update counters on main actor
+            // Update counters on main actor and clear progress
             await MainActor.run {
                 self.jobsCompleted += 1
                 self.totalSpaceSaved += max(spaceSaved, 0)
+                self.activeJobProgress.removeValue(forKey: jobId)
             }
 
         } catch {
             log.error("Transcode job \(jobId.prefix(8)) failed: \(error.localizedDescription)", category: .transcode)
+            await MainActor.run {
+                self.activeJobProgress.removeValue(forKey: jobId)
+            }
             await handleJobError(jobId: jobId, error: error)
         }
     }
@@ -1004,6 +1255,42 @@ public enum TranscodePhase: String, Sendable {
         case .validating: return "Validating"
         case .replacing: return "Replacing"
         }
+    }
+}
+
+// MARK: - Job Progress
+
+public struct JobProgress: Sendable {
+    public let percent: Double       // 0-100
+    public let speed: String?        // e.g. "2.5x"
+    public let elapsed: TimeInterval // seconds since transcode started
+    public let phase: String         // "Downloading", "Transcoding", etc.
+
+    /// Estimated time remaining based on current speed.
+    public var eta: TimeInterval? {
+        guard percent > 1 else { return nil }
+        let remaining = (elapsed / percent) * (100.0 - percent)
+        return remaining
+    }
+
+    /// Human-readable elapsed time.
+    public var elapsedFormatted: String {
+        Self.formatDuration(elapsed)
+    }
+
+    /// Human-readable ETA.
+    public var etaFormatted: String? {
+        guard let eta else { return nil }
+        return Self.formatDuration(eta)
+    }
+
+    static func formatDuration(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds)
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return String(format: "%d:%02d:%02d", h, m, s) }
+        return String(format: "%d:%02d", m, s)
     }
 }
 

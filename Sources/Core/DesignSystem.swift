@@ -260,3 +260,23 @@ public struct IVSkeletonRow: View {
         .accessibilityHidden(true)
     }
 }
+
+// MARK: - Section Card Modifier
+
+struct SectionCardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, IVSpacing.md)
+            .padding(.vertical, IVSpacing.sm)
+            .background {
+                RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                    .fill(Color.ivSurface.opacity(0.18))
+            }
+    }
+}
+
+extension View {
+    func sectionCard() -> some View {
+        modifier(SectionCardModifier())
+    }
+}

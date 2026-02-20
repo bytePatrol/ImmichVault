@@ -6,6 +6,7 @@ import SwiftUI
 
 struct JobsView: View {
     @StateObject private var viewModel = JobsViewModel()
+    @ObservedObject private var orchestrator = TranscodeOrchestrator.shared
     @EnvironmentObject var appState: AppState
     @State private var showInspector = false
 
@@ -43,6 +44,9 @@ struct JobsView: View {
         .onAppear {
             viewModel.loadJobs()
         }
+        .onDisappear {
+            viewModel.cleanup()
+        }
     }
 
     // MARK: - Toolbar
@@ -61,6 +65,18 @@ struct JobsView: View {
                 }
 
                 Spacer()
+
+                // Clear finished jobs
+                if viewModel.finishedJobCount > 0 {
+                    Button {
+                        viewModel.clearFinishedJobs()
+                    } label: {
+                        Label("Clear Finished", systemImage: "trash")
+                            .font(IVFont.bodyMedium)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Remove all completed, failed, and cancelled jobs")
+                }
 
                 // Refresh
                 Button {
@@ -103,6 +119,37 @@ struct JobsView: View {
                 .pickerStyle(.menu)
                 .frame(width: 140)
                 .font(IVFont.caption)
+            }
+
+            // Live processing progress
+            if orchestrator.isRunning {
+                HStack(spacing: IVSpacing.sm) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    if let progress = orchestrator.currentProgress {
+                        Text(progress.description)
+                            .font(IVFont.captionMedium)
+                            .foregroundColor(.ivAccent)
+                    } else {
+                        Text("Processing jobs...")
+                            .font(IVFont.captionMedium)
+                            .foregroundColor(.ivAccent)
+                    }
+                    Spacer()
+                    Text("\(orchestrator.jobsCompleted) completed")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+                    if orchestrator.totalSpaceSaved > 0 {
+                        Text("(\(TranscodeResult.formatBytes(orchestrator.totalSpaceSaved)) saved)")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivSuccess)
+                    }
+                }
+                .padding(IVSpacing.sm)
+                .background {
+                    RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                        .fill(Color.ivAccent.opacity(0.06))
+                }
             }
 
             // Error banner
@@ -248,78 +295,144 @@ struct JobsView: View {
     }
 
     private func jobRow(_ job: TranscodeJob) -> some View {
-        HStack(spacing: 0) {
-            // Filename + codec info
-            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
-                Text(job.originalFilename ?? "Unknown")
-                    .font(IVFont.body)
-                    .foregroundColor(.ivTextPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        let progress = orchestrator.activeJobProgress[job.id]
 
-                HStack(spacing: IVSpacing.xs) {
-                    if let codec = job.originalCodec {
-                        Text(codec.uppercased())
-                            .font(IVFont.monoSmall)
-                            .foregroundColor(.ivTextTertiary)
-                    }
-                    if let resolution = job.originalResolution {
-                        Text(resolution)
-                            .font(IVFont.monoSmall)
-                            .foregroundColor(.ivTextTertiary)
+        return VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                // Filename + codec info
+                VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                    Text(job.originalFilename ?? "Unknown")
+                        .font(IVFont.body)
+                        .foregroundColor(.ivTextPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    HStack(spacing: IVSpacing.xs) {
+                        if let codec = job.originalCodec {
+                            Text(codec.uppercased())
+                                .font(IVFont.monoSmall)
+                                .foregroundColor(.ivTextTertiary)
+                        }
+                        if let resolution = job.originalResolution {
+                            Text(resolution)
+                                .font(IVFont.monoSmall)
+                                .foregroundColor(.ivTextTertiary)
+                        }
                     }
                 }
-            }
-            .frame(minWidth: 120, alignment: .leading)
+                .frame(minWidth: 120, alignment: .leading)
 
-            Spacer()
+                Spacer()
 
-            // Status badge
-            IVStatusBadge(job.state.label, status: job.state.statusBadgeType)
+                // Status badge with spinner for active jobs
+                HStack(spacing: IVSpacing.xs) {
+                    if job.state.isActive {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 12, height: 12)
+                    }
+                    IVStatusBadge(job.state.label, status: job.state.statusBadgeType)
+                }
                 .frame(width: 130, alignment: .center)
 
-            // Provider
-            Text(job.provider.label)
-                .font(IVFont.caption)
-                .foregroundColor(.ivTextSecondary)
-                .frame(width: 90, alignment: .center)
+                // Provider
+                Text(job.provider.label)
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+                    .frame(width: 90, alignment: .center)
 
-            // Original size
-            Text(job.originalFileSize.map { formatBytes($0) } ?? "--")
-                .font(IVFont.mono)
-                .foregroundColor(.ivTextPrimary)
-                .frame(width: 80, alignment: .trailing)
-
-            // Output size
-            Text(job.outputFileSize.map { formatBytes($0) } ?? "--")
-                .font(IVFont.mono)
-                .foregroundColor(.ivTextSecondary)
-                .frame(width: 80, alignment: .trailing)
-
-            // Space saved
-            if let saved = job.spaceSaved, saved > 0 {
-                Text(formatBytes(saved))
-                    .font(IVFont.captionMedium)
-                    .foregroundColor(.ivSuccess)
+                // Original size
+                Text(job.originalFileSize.map { formatBytes($0) } ?? "--")
+                    .font(IVFont.mono)
+                    .foregroundColor(.ivTextPrimary)
                     .frame(width: 80, alignment: .trailing)
-            } else {
-                Text("--")
+
+                // Output size
+                Text(job.outputFileSize.map { formatBytes($0) } ?? "--")
+                    .font(IVFont.mono)
+                    .foregroundColor(.ivTextSecondary)
+                    .frame(width: 80, alignment: .trailing)
+
+                // Space saved
+                if let saved = job.spaceSaved, saved > 0 {
+                    Text(formatBytes(saved))
+                        .font(IVFont.captionMedium)
+                        .foregroundColor(.ivSuccess)
+                        .frame(width: 80, alignment: .trailing)
+                } else {
+                    Text("--")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextTertiary)
+                        .frame(width: 80, alignment: .trailing)
+                }
+
+                // Created date
+                Text(Self.shortDateFormatter.string(from: job.createdAt))
                     .font(IVFont.caption)
                     .foregroundColor(.ivTextTertiary)
-                    .frame(width: 80, alignment: .trailing)
+                    .frame(width: 90, alignment: .trailing)
             }
 
-            // Created date
-            Text(Self.shortDateFormatter.string(from: job.createdAt))
-                .font(IVFont.caption)
-                .foregroundColor(.ivTextTertiary)
-                .frame(width: 90, alignment: .trailing)
+            // Per-job progress bar for active jobs
+            if let progress {
+                jobProgressBar(progress)
+                    .padding(.top, IVSpacing.xxs)
+            }
         }
         .padding(.horizontal, IVSpacing.lg)
         .padding(.vertical, IVSpacing.sm)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(job.originalFilename ?? "Unknown"), \(job.state.label), \(job.provider.label)")
+    }
+
+    // MARK: - Per-Job Progress Bar
+
+    private func jobProgressBar(_ progress: JobProgress) -> some View {
+        VStack(spacing: IVSpacing.xxxs) {
+            // Progress bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.ivSurface)
+
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.ivAccent)
+                        .frame(width: max(0, geo.size.width * min(progress.percent / 100.0, 1.0)))
+                        .animation(.linear(duration: 0.3), value: progress.percent)
+                }
+            }
+            .frame(height: 4)
+
+            // Progress details row
+            HStack(spacing: IVSpacing.sm) {
+                Text(progress.phase)
+                    .font(IVFont.monoSmall)
+                    .foregroundColor(.ivAccent)
+
+                Text(String(format: "%.1f%%", progress.percent))
+                    .font(IVFont.monoSmall)
+                    .foregroundColor(.ivTextPrimary)
+
+                if let speed = progress.speed {
+                    Text(speed)
+                        .font(IVFont.monoSmall)
+                        .foregroundColor(.ivTextSecondary)
+                }
+
+                Spacer()
+
+                Text(progress.elapsedFormatted)
+                    .font(IVFont.monoSmall)
+                    .foregroundColor(.ivTextTertiary)
+
+                if let eta = progress.etaFormatted {
+                    Text("ETA \(eta)")
+                        .font(IVFont.monoSmall)
+                        .foregroundColor(.ivTextSecondary)
+                }
+            }
+        }
     }
 
     // MARK: - Context Menu

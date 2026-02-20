@@ -459,7 +459,8 @@ public final class ImmichClient: Sendable {
         var bodyDict: [String: Any] = [
             "type": type,
             "page": page,
-            "size": size
+            "size": size,
+            "withExif": true
         ]
         if let takenAfter = takenAfter {
             bodyDict["takenAfter"] = iso.string(from: takenAfter)
@@ -581,7 +582,8 @@ public final class ImmichClient: Sendable {
         immichAssetId: String,
         destinationURL: URL,
         serverURL: String,
-        apiKey: String
+        apiKey: String,
+        onProgress: (@Sendable (Int64, Int64) -> Void)? = nil
     ) async throws -> URL {
         guard let baseURL = URL(string: normalizeURL(serverURL)) else {
             throw ImmichError.invalidURL
@@ -597,31 +599,66 @@ public final class ImmichClient: Sendable {
         log.info("Downloading asset original: \(immichAssetId)", category: .immichAPI)
 
         do {
-            let (tempURL, response) = try await session.download(for: request)
+            let fm = FileManager.default
+
+            // Ensure parent directory exists
+            let parentDir = destinationURL.deletingLastPathComponent()
+            if !fm.fileExists(atPath: parentDir.path) {
+                try fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
+            }
+
+            // Remove existing file at destination if present
+            if fm.fileExists(atPath: destinationURL.path) {
+                try fm.removeItem(at: destinationURL)
+            }
+
+            // Stream download with progress tracking using URLSession.bytes
+            let (bytes, response) = try await session.bytes(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw ImmichError.downloadFailed("Invalid response type")
             }
 
             switch httpResponse.statusCode {
             case 200:
-                // Remove existing file at destination if present
-                let fm = FileManager.default
-                if fm.fileExists(atPath: destinationURL.path) {
-                    try fm.removeItem(at: destinationURL)
+                let expectedLength = httpResponse.expectedContentLength  // -1 if unknown
+                var bytesReceived: Int64 = 0
+
+                // Write streamed bytes to destination file
+                let fileHandle = try FileHandle(forWritingTo: {
+                    fm.createFile(atPath: destinationURL.path, contents: nil)
+                    return destinationURL
+                }())
+
+                // Buffer for efficient writing (256 KB chunks)
+                var buffer = Data()
+                let bufferSize = 256 * 1024
+
+                for try await byte in bytes {
+                    buffer.append(byte)
+                    bytesReceived += 1
+
+                    if buffer.count >= bufferSize {
+                        fileHandle.write(buffer)
+                        buffer.removeAll(keepingCapacity: true)
+
+                        if expectedLength > 0 {
+                            onProgress?(bytesReceived, expectedLength)
+                        }
+                    }
                 }
 
-                // Ensure parent directory exists
-                let parentDir = destinationURL.deletingLastPathComponent()
-                if !fm.fileExists(atPath: parentDir.path) {
-                    try fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
+                // Write remaining buffer
+                if !buffer.isEmpty {
+                    fileHandle.write(buffer)
+                }
+                fileHandle.closeFile()
+
+                // Final progress update
+                if expectedLength > 0 {
+                    onProgress?(bytesReceived, expectedLength)
                 }
 
-                // Move downloaded temp file to destination
-                try fm.moveItem(at: tempURL, to: destinationURL)
-
-                let fileSize = (try? fm.attributesOfItem(atPath: destinationURL.path)[.size] as? Int64) ?? 0
-                log.info("Downloaded asset \(immichAssetId): \(fileSize) bytes → \(destinationURL.lastPathComponent)", category: .immichAPI)
-
+                log.info("Downloaded asset \(immichAssetId): \(bytesReceived) bytes → \(destinationURL.lastPathComponent)", category: .immichAPI)
                 return destinationURL
 
             case 401:
@@ -643,7 +680,7 @@ public final class ImmichClient: Sendable {
     // MARK: - Replace Asset
 
     /// Replaces the original file of an existing Immich asset via PUT /api/assets/{id}/original.
-    /// Uses multipart/form-data with the `assetData` field.
+    /// Uses multipart/form-data with required fields: assetData, deviceAssetId, deviceId, fileCreatedAt, fileModifiedAt.
     ///
     /// - Parameters:
     ///   - immichAssetId: The Immich asset ID to replace
@@ -651,13 +688,15 @@ public final class ImmichClient: Sendable {
     ///   - filename: Filename for the replacement file
     ///   - serverURL: Immich server URL
     ///   - apiKey: Immich API key
+    ///   - fileCreatedAt: Original file creation date (falls back to current date)
     /// - Returns: Updated asset info
     public func replaceAsset(
         immichAssetId: String,
         fileData: Data,
         filename: String,
         serverURL: String,
-        apiKey: String
+        apiKey: String,
+        fileCreatedAt: Date? = nil
     ) async throws -> AssetInfo {
         guard let baseURL = URL(string: normalizeURL(serverURL)) else {
             throw ImmichError.invalidURL
@@ -673,8 +712,21 @@ public final class ImmichClient: Sendable {
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 300 // 5 minutes for large files
 
+        // ISO8601 formatter for date fields
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let now = Date()
+        let createdAtStr = iso.string(from: fileCreatedAt ?? now)
+        let modifiedAtStr = iso.string(from: now)
+
         // Build multipart body
         var body = Data()
+
+        // Required metadata fields
+        body.appendMultipartField(name: "deviceAssetId", value: "\(immichAssetId)-transcoded", boundary: boundary)
+        body.appendMultipartField(name: "deviceId", value: "ImmichVault", boundary: boundary)
+        body.appendMultipartField(name: "fileCreatedAt", value: createdAtStr, boundary: boundary)
+        body.appendMultipartField(name: "fileModifiedAt", value: modifiedAtStr, boundary: boundary)
 
         // File data
         body.appendMultipartFile(name: "assetData", filename: filename, mimeType: mimeType, data: fileData, boundary: boundary)

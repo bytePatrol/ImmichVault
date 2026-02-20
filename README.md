@@ -1,210 +1,273 @@
-# ImmichVault
+<p align="center">
+  <img src="docs/logo.png" alt="ImmichVault" width="128" height="128">
+</p>
 
-ImmichVault is a macOS application for uploading your Apple Photos library to an [Immich](https://immich.app) server with idempotent, never-re-upload protection and a built-in video optimizer. It supports local ffmpeg transcoding and cloud provider integration (CloudConvert, Convertio, FreeConvert), a rules engine for automated optimization, and a full activity log with export. Every upload and transcode operation is tracked in a local SQLite database with a strict state machine to guarantee reliability.
+<h1 align="center">ImmichVault</h1>
 
-## Requirements
+<p align="center">
+  <strong>The ultimate macOS companion for <a href="https://immich.app">Immich</a></strong><br>
+  Upload your entire Photos library. Optimize oversized videos. Save terabytes of storage.
+</p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-blue?logo=apple" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/swift-6.0-orange?logo=swift" alt="Swift 6.0">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
+  <img src="https://img.shields.io/github/v/release/bytePatrol/ImmichVault" alt="Release">
+</p>
+
+---
+
+## What is ImmichVault?
+
+ImmichVault is a native macOS app that bridges your Apple Photos library and your self-hosted [Immich](https://immich.app) server. It handles two major workflows that Immich doesn't offer natively:
+
+1. **Photos Library Upload** — Scan your macOS Photos library, apply smart filters, and upload everything to Immich with bulletproof duplicate prevention.
+2. **Video Optimization** — Find oversized videos on your Immich server, transcode them to save disk space, and seamlessly replace the originals — with full metadata preservation.
+
+Built with SwiftUI and designed to feel like a first-party macOS app.
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Dashboard" width="800">
+</p>
+
+---
+
+## Features
+
+### Photos Library Upload
+
+Upload your entire Apple Photos library to Immich with intelligent duplicate detection and never-reupload guarantees.
+
+<p align="center">
+  <img src="docs/screenshots/photos_upload.png" alt="Photos Upload" width="800">
+</p>
+
+- **Smart Scanning** — Connects to your macOS Photos library via PhotoKit and enumerates all assets
+- **Never Re-Upload** — Local SQLite database tracks every asset by `PHAsset.localIdentifier`. Once uploaded, an asset is never uploaded again — even if deleted from Immich
+- **Configurable Filters** — Start date, album include/exclude, hide screenshots, exclude shared library, favorites only, media type toggles (photos/videos/Live Photos)
+- **Edits & Variants** — Choose to upload originals only, edited versions only, or both
+- **iCloud Awareness** — Detects iCloud placeholders and shows which assets need downloading
+- **Idempotent Uploads** — Client-generated idempotency keys prevent duplicates even if the network drops mid-upload
+- **Explain Why Skipped** — Every skipped asset shows an exact breakdown of which filter rules excluded it
+- **Force Re-Upload** — Override duplicate protection for specific assets with confirmation and audit logging
+- **Upload State Machine** — Each asset progresses through explicit states: idle → hashing → uploading → verifying → done, with retry and backoff for failures
+
+### Video Optimizer
+
+Find oversized videos on your Immich server and transcode them to dramatically reduce storage usage while preserving quality.
+
+<p align="center">
+  <img src="docs/screenshots/optimizer.png" alt="Video Optimizer" width="800">
+</p>
+
+- **Candidate Discovery** — Scans your Immich library for videos exceeding a size threshold within a date range
+- **Review Before Action** — Preview every video that will be transcoded: file size, codec, resolution, bitrate, duration, estimated output size
+- **Transcoding Presets** — Built-in presets for common scenarios (iPhone, GoPro, Screen Recording) plus fully custom codec/CRF/resolution/speed settings
+- **Local ffmpeg** — Bundled ffmpeg/ffprobe binaries for zero-dependency local transcoding
+- **Cloud Providers** — Plug-in support for CloudConvert, Convertio, and FreeConvert with cost tracking
+- **Metadata Preservation** — Three-layer metadata pipeline ensures GPS coordinates, creation dates, camera make/model, lens info, and rotation survive transcoding
+- **Safe Replacement** — Transcoded videos replace originals on Immich via the `replaceAsset` API only after passing strict metadata validation
+- **Manual Encode** — Paste any Immich asset ID or URL to transcode a single video with custom settings
+
+### Rules Engine
+
+Define automatic optimization rules that match videos by size, date range, album, and more.
+
+- **Preset Rule Packs** — iPhone Default, GoPro, Screen Recording presets ship out of the box
+- **Custom Rules** — Build rules combining size thresholds, date ranges, codec targets, and CRF values
+- **Optimizer Mode** — Continuously scans for oversized videos and queues optimization within configurable maintenance windows
+
+### Jobs & Monitoring
+
+<p align="center">
+  <img src="docs/screenshots/jobs.png" alt="Jobs" width="800">
+</p>
+
+- **Real-Time Progress** — Live progress bars with speed and ETA for active transcode jobs
+- **Filter & Sort** — View jobs by status (active, completed, failed, cancelled) with multiple sort options
+- **Retry & Cancel** — One-click retry for failed jobs or cancel active ones
+- **Space Savings** — Track total storage saved across all completed optimizations
+
+### Activity Log
+
+<p align="center">
+  <img src="docs/screenshots/logs.png" alt="Activity Log" width="800">
+</p>
+
+- **Searchable Logs** — Full-text search across all activity with level and category filters
+- **Export** — Export logs as JSON or CSV for external analysis
+- **Secret Redaction** — API keys and sensitive data are automatically redacted from all log entries
+
+### Dashboard
+
+At-a-glance overview of your ImmichVault activity:
+
+- Connection status and server health
+- Queued, uploaded, optimized, and failed asset counts
+- Optimizer status with active rule count
+- Recent activity timeline with direct links to details
+
+### Settings & Safety
+
+- **Keychain Storage** — All API keys stored securely in the macOS Keychain (never plaintext)
+- **Upload Filters** — Configure start date, album rules, media types, and edit preferences
+- **Safety Rails** — Configurable concurrency limits, bandwidth caps, and maintenance windows
+- **Rate Limiting** — Per-provider rate limits and daily/weekly/monthly cost caps for cloud transcoding
+- **Database Portability** — Export/import your database snapshot to migrate between Macs
+- **No App Sandbox** — Full Photos library access without sandbox restrictions
+
+---
+
+## Installation
+
+### Download
+
+Grab the latest DMG from the [Releases](https://github.com/bytePatrol/ImmichVault/releases) page.
+
+1. Open `ImmichVault.dmg`
+2. Drag **ImmichVault** to your **Applications** folder
+3. Launch and configure your Immich server URL + API key
+
+### Build from Source
+
+**Requirements:**
 - macOS 13+ (Ventura)
-- An Immich server with API access
-- For building from source: Xcode 16+, [xcodegen](https://github.com/yonaskolb/XcodeGen)
-
-## Quick Start
-
-1. Download `ImmichVault.dmg` from the `dist/` directory (or build from source).
-2. Drag `ImmichVault.app` to your Applications folder.
-3. Launch the app and complete the 3-step onboarding: enter your Immich server URL, paste your API key, and test the connection.
-4. Grant Photos library access when prompted by macOS.
-
-## Building from Source
-
-Prerequisites: Xcode 16+, xcodegen (`brew install xcodegen`).
+- Xcode 15+ with Swift 6.0
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
+- ffmpeg/ffprobe binaries (auto-downloaded by the build script)
 
 ```bash
-# Download ffmpeg/ffprobe static binaries (~80MB)
-./scripts/download_ffmpeg.sh
+# Clone the repository
+git clone https://github.com/bytePatrol/ImmichVault.git
+cd ImmichVault
 
-# Generate Xcode project and build Release configuration
+# Build release
 ./scripts/build_release.sh
 
-# Package into a distributable DMG
+# Package DMG
+brew install create-dmg   # if not already installed
 ./scripts/package_dmg.sh
+
+# Output: dist/ImmichVault.dmg
 ```
 
-The output DMG will be at `dist/ImmichVault.dmg`.
-
-### Running Tests
+### Run Tests
 
 ```bash
 xcodegen generate
 xcodebuild -project ImmichVault.xcodeproj -scheme ImmichVault test
 ```
 
-There are 362 unit and integration tests covering database migrations, state machine transitions, upload/transcode pipelines, provider mock tests, metadata validation, filter logic, rules engine evaluation, cost ledger aggregation, and more.
-
-## Features
-
-### Photos Upload
-
-Connect to your macOS Photos library via PhotoKit and upload images and videos to Immich. Supports comprehensive filtering: start date, album include/exclude, media type toggles (photos, videos, Live Photos), favorites, hidden assets, screenshots, and shared library exclusion. iCloud placeholder assets are detected and clearly displayed with a "needs download" status. The never-re-upload guarantee means that once an asset is successfully uploaded, it will not be uploaded again even if deleted from Immich -- only an explicit Force Re-Upload (with confirmation and audit log) can override this. Every skipped asset shows an "Explain Why Skipped" breakdown with the exact rule that caused the skip.
-
-### Video Optimizer
-
-Find oversized videos in your Immich library by setting a size threshold and date range, then transcode them to save storage while preserving quality. The review list shows each candidate with file size, codec, resolution, bitrate, and duration. Transcoding uses configurable presets (codec, CRF, audio settings, container format) and supports both local ffmpeg and cloud providers. Metadata validation is a hard gate: if the transcoded output does not match the source metadata (creation date, GPS, orientation, duration within tolerance), the replace operation is blocked and the job is marked as permanently failed.
-
-### Cloud Providers
-
-Three cloud transcoding providers are supported alongside local ffmpeg:
-
-- **CloudConvert** -- Task-graph API with multipart upload, cost: (1 + ceil(minutes)) x $0.02/min
-- **Convertio** -- Simple upload/convert API, cost: $0.10/min
-- **FreeConvert** -- Task-graph API similar to CloudConvert, cost: $0.008/min
-
-Each provider has health checks, configurable timeouts, retry with exponential backoff, per-provider concurrency limits, and a cost ledger that tracks spending by day, week, month, and all-time.
-
-### Rules Engine
-
-Define conditional rules that automatically select transcode presets for matching videos. Each rule consists of AND-combined conditions (file size, date range, codec, resolution, duration, bitrate, filename pattern) and maps to a preset and provider. Rules are evaluated by priority (lower number wins). Built-in preset packs are included:
-
-- **iPhone Default** -- H.265, CRF 24, optimized for iPhone video
-- **GoPro** -- H.265, CRF 22, higher quality for action footage
-- **Screen Recording** -- H.264, CRF 28, aggressive compression for screen captures
-
-Custom rules can be created, edited, reordered, and toggled in the Rules Editor UI.
-
-### Optimizer Mode
-
-A continuous background scanning mode that automatically discovers optimization candidates and queues transcode jobs based on matching rules. Runs only while the app is open. Configurable with:
-
-- Scan interval (how often to check for new candidates)
-- Maintenance window scheduling (time range and days of week)
-- Bandwidth caps and rate limiting
-
-### Safety
-
-- All API keys (Immich, CloudConvert, Convertio, FreeConvert) stored in macOS Keychain
-- Log messages automatically redacted to remove secrets
-- User-adjustable rate limiting and bandwidth caps
-- Concurrency limits per CPU and per provider
-- Maintenance window scheduling restricts when optimization runs
-- Data loss prevention: originals are never deleted by default; opting in requires typed confirmation ("DELETE ORIGINALS")
-
-### Database
-
-SQLite via GRDB.swift with versioned migrations (v1 through v4). The database tracks every asset's upload state, transcode jobs, cost records, transcode rules, and activity log entries. Features include:
-
-- Reveal database file in Finder
-- Export database snapshot (uses `VACUUM INTO` for a clean, self-contained copy)
-- Import snapshot with schema version validation and automatic migration
-- Seamless migration between Macs
-
-### Activity Log
-
-A filterable activity log stored in SQLite with support for level (debug, info, warning, error), category (general, upload, transcode, metadata, immich-api, photos, database, keychain, scheduler), date range, search text, and per-asset filtering. Export to JSON or CSV at any time.
+---
 
 ## Architecture
 
-ImmichVault compiles as a single Xcode target with source organized by directory:
-
 ```
 ImmichVault/
-  App/                    SwiftUI entry point, AppState, navigation
-  Views/                  10 SwiftUI views (Dashboard, Photos Upload, Optimizer,
-                          Jobs, Logs, Settings, Onboarding, Inspector, Rules Editor,
-                          Main Navigation)
-  ViewModels/             6 view models driving each screen
-  Resources/              Info.plist, entitlements, Binaries/ (ffmpeg/ffprobe)
-
-Sources/
-  Core/                   Database models (AssetRecord, TranscodeJob, TranscodeRule,
-                          ActivityLogRecord), DatabaseManager with migrations,
-                          StateMachine, AppSettings, KeychainManager, LogManager,
-                          UploadEngine, TranscodeOrchestrator, OptimizerScheduler,
-                          RulesEngine, RuleCondition, CostLedger, AssetHasher,
-                          DesignSystem
-  ImmichClient/           ImmichClient (connection test, upload, replace, search,
-                          download, asset details)
-  PhotosScanner/          PhotoKit integration, iCloud placeholder detection,
-                          ScanFilterEngine
-  TranscodeEngine/        TranscodeProvider protocol, TranscodePreset,
-                          LocalFFmpegProvider, CloudTranscodeProvider protocol,
-                          CloudConvertProvider, ConvertioProvider, FreeConvertProvider,
-                          CloudJobStatus, CloudProviderHelpers
-  MetadataEngine/         VideoMetadata, MetadataValidationResult, MetadataEngine
-                          (ffprobe extraction, ffmpeg metadata copy, validation)
-
-Tests/
-  CoreTests/              Database, state machine, hashing, filters, rules, logs,
-                          upload pipeline
-  ImmichClientTests/      Connection, upload, search, replace (mock URLProtocol)
-  TranscodeEngineTests/   Presets, pipeline, metadata, cloud providers, cost ledger
+├── ImmichVault/                    # App target
+│   ├── App/                        # SwiftUI App entry point
+│   ├── Views/                      # All SwiftUI views
+│   ├── ViewModels/                 # ObservableObject view models
+│   └── Resources/                  # Assets, Binaries (ffmpeg/ffprobe)
+├── Sources/
+│   ├── Core/                       # Database, state machines, orchestrator, scheduling
+│   ├── ImmichClient/               # Immich API client (upload, replace, search, download)
+│   ├── PhotosScanner/              # PhotoKit integration and asset enumeration
+│   ├── TranscodeEngine/            # Local ffmpeg + cloud provider implementations
+│   └── MetadataEngine/             # Metadata extraction, validation, and application
+├── Tests/
+│   ├── CoreTests/                  # Database, state machine, logging tests
+│   ├── ImmichClientTests/          # API client mock tests
+│   └── TranscodeEngineTests/       # Transcode, metadata, preset tests
+└── scripts/
+    ├── build_release.sh            # Release build script
+    ├── package_dmg.sh              # DMG packaging script
+    └── download_ffmpeg.sh          # ffmpeg binary downloader
 ```
 
-### Key Technical Decisions
+**Key design decisions:**
+- **Single Xcode target** compiled as module `ImmichVault`, generated via XcodeGen from `project.yml`
+- **GRDB.swift** for SQLite — type-safe, migration-friendly, battle-tested
+- **Separate TranscodeJob table** from AssetRecord for clean lifecycle separation
+- **Metadata validation is a hard gate** — `replaceAsset` is never called if validation fails
+- **GPS validation is critical severity** — replacement blocked if GPS coordinates are lost
 
-- **GRDB.swift** chosen over SQLite.swift for its richer query DSL, built-in migration support, and `DatabasePool` for concurrent reads.
-- **No App Sandbox** -- required for Photos library access and execution of bundled ffmpeg binaries.
-- **Ad-hoc code signing** -- notarization requires an Apple Developer Program membership.
-- **Structured concurrency** (async/await) throughout, with `@MainActor` view models.
-- **State machine** with explicit states for both uploads and transcode jobs, ensuring no operation is lost or duplicated.
+---
 
-## Keyboard Shortcuts
+## Metadata Preservation
 
-| Shortcut | Action |
-|----------|--------|
-| Cmd+1 | Dashboard |
-| Cmd+2 | Photos Upload |
-| Cmd+3 | Optimizer |
-| Cmd+4 | Jobs |
-| Cmd+5 | Logs |
-| Cmd+6 | Settings |
-| Cmd+R | Scan / Refresh in active view |
-| Cmd+I | Toggle Inspector panel |
-| Cmd+, | Settings |
+ImmichVault uses a multi-layer metadata pipeline to ensure nothing is lost during transcoding:
 
-## Manual Verification Checklist
+1. **ffprobe extraction** — Reads format-level and stream-level metadata from the source
+2. **exiftool enrichment** — Extracts camera-specific tags that ffprobe misses (lens model, focal length, QuickTime GPS atoms)
+3. **Immich API fallback** — For files with no embedded GPS (e.g., Google-produced MP4s), retrieves coordinates from Immich's database
+4. **ffmpeg injection** — Remuxes transcoded streams with source metadata via `-map_metadata` plus explicit GPS (ISO 6709), make/model, and lens model tags
+5. **exiftool post-processing** — Copies QuickTime Keys, UserData, XMP, and ItemList groups from source, then writes GPS coordinates in ISO 6709 format
+6. **Strict validation** — Compares source and output metadata. Any critical mismatch (duration, resolution, GPS loss) blocks replacement
 
-- [ ] **Photos permission** -- App requests Photos access on first launch, works correctly when granted, shows an explanatory message when denied
-- [ ] **Start Date filter** -- Assets with a creation date before the configured start date show status "Skipped: Before start date" with correct reasoning in the inspector
-- [ ] **Never re-upload** -- Delete an asset from Immich, then scan again in ImmichVault; confirm the app does NOT re-upload the deleted asset
-- [ ] **Force re-upload** -- Right-click an asset and select "Force Re-Upload"; confirm the upload occurs, the confirmation dialog appears, and an audit log entry is created
-- [ ] **iCloud placeholders** -- Assets stored only in iCloud display an iCloud icon and "needs download" status; the "Download from iCloud then upload" option works when selected
-- [ ] **Optimizer candidates** -- The review list correctly shows only videos exceeding the size threshold within the specified date range
-- [ ] **Metadata preservation** -- Spot-check a transcoded video with a metadata viewer (e.g., `exiftool` or `mdls`); verify creation date, GPS coordinates, and orientation match the source
-- [ ] **Metadata validation gate** -- Intentionally corrupt metadata on a transcoded file; confirm the app refuses to call replaceAsset and marks the job as permanently failed
-- [ ] **Bandwidth limit** -- Set a bandwidth limit in Settings, start an upload batch, and verify the transfer speed is throttled appropriately
-- [ ] **Maintenance window** -- Enable a maintenance window, set it to a time outside the current time; verify the optimizer scheduler does not run until the window opens
-- [ ] **Keychain storage** -- Verify no plaintext API keys exist in UserDefaults (check `defaults read com.immichvault.app`), log files, or any on-disk file outside the Keychain
-- [ ] **Log redaction** -- Add an API key to the Immich settings, trigger some API calls, then inspect the activity log; confirm the key is replaced with `[REDACTED]`
-- [ ] **DB export/import** -- Export a database snapshot, reset the app to fresh state, import the snapshot; verify data integrity, schema version, and that all records are present
-- [ ] **Dark mode** -- Toggle macOS appearance between Light and Dark; verify all screens render correctly with proper contrast and no missing colors
-- [ ] **Keyboard navigation** -- Tab through UI elements on each screen; verify focus rings are visible and all interactive elements are reachable
-- [ ] **VoiceOver** -- Enable VoiceOver, navigate each screen; verify all elements are announced with meaningful labels
+**Preserved metadata includes:** creation date, GPS coordinates, camera make/model, lens model, focal length, rotation/orientation, timezone offsets, and QuickTime vendor tags.
+
+---
+
+## Immich API Usage
+
+ImmichVault uses the following Immich API endpoints:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/server/info` | Connection test and server version |
+| `GET /api/users/me` | Authenticated user info |
+| `POST /api/assets` | Upload new assets (multipart) |
+| `PUT /api/assets/{id}/original` | Replace asset with transcoded version |
+| `POST /api/search/metadata` | Search for video candidates |
+| `GET /api/assets/{id}` | Fetch asset details (exif, GPS, dates) |
+| `GET /api/assets/{id}/original` | Download original file for transcoding |
+
+Authentication uses the `x-api-key` header with a key stored in your macOS Keychain.
+
+---
+
+## Configuration
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Immich Server URL | Your Immich instance URL | — |
+| API Key | Immich API key (stored in Keychain) | — |
+| Start Date | Ignore all media before this date | None |
+| Max Concurrent Uploads | Parallel upload limit | 3 |
+| Max Concurrent Transcodes | Parallel transcode limit | 2 |
+| Bandwidth Cap | Upload speed limit (MB/s) | Unlimited |
+| Maintenance Window | Time range for optimizer runs | 24/7 |
+| Min Video Size | Minimum file size for optimization candidates | 100 MB |
+
+---
+
+## Requirements
+
+- **macOS 13+** (Ventura or later)
+- **Immich server** v1.90+ with API access
+- **Photos library access** permission (requested on first launch)
+- **~200MB disk space** for the app bundle (includes ffmpeg/ffprobe)
+
+---
 
 ## Known Limitations
 
-- **No App Sandbox** -- Required for direct Photos library access and execution of the bundled ffmpeg binary. This means the app cannot be distributed via the Mac App Store.
-- **Ad-hoc code signing only** -- Notarization requires an Apple Developer Program account ($99/year). Users may need to right-click and select "Open" on first launch, or allow the app in System Settings > Privacy & Security.
-- **Optimizer mode runs only while the app is open** -- There is no LaunchAgent or background daemon; the optimizer scheduler stops when the app quits.
-- **ffmpeg/ffprobe binaries (~80MB) must be downloaded separately** -- Run `./scripts/download_ffmpeg.sh` before building. The binaries are not checked into version control due to their size.
-- **Cloud provider API keys must be obtained independently** -- CloudConvert, Convertio, and FreeConvert each require their own account and API key.
-- **App icon uses system default** -- No custom icon artwork has been created; the app uses the default macOS application icon.
-- **Live Photo pairing** -- Live Photos are detected and handled as paired assets, but the pairing heuristic depends on PHAsset metadata consistency.
-- **Immich replaceAsset endpoint** -- The replace endpoint used for video optimization is marked as deprecated in the Immich API but remains functional as of Immich v1.x.
+- Photos library scanning requires the app to have Full Disk Access or Photos permission
+- iCloud placeholder downloads require the Photos app to be running
+- Cloud transcoding providers (CloudConvert, Convertio, FreeConvert) require separate API keys and accounts
+- Local ffmpeg transcoding speed depends on your Mac's CPU — Apple Silicon recommended
+- The app must be running for the optimizer scheduler to process jobs (no background daemon)
 
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Language | Swift 6.0 |
-| UI Framework | SwiftUI |
-| Database | GRDB.swift 7.10.0 (SQLite) |
-| Networking | URLSession |
-| Photos Access | PhotoKit (PHAsset) |
-| Video Transcoding | ffmpeg 7.1 (static binary) |
-| Secrets | Keychain Services |
-| Build System | xcodegen + xcodebuild |
-| Minimum OS | macOS 13.0 (Ventura) |
+---
 
 ## License
 
-This project is provided as-is for personal use.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  <sub>Built for the <a href="https://immich.app">Immich</a> community</sub>
+</p>

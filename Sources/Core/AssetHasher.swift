@@ -97,7 +97,7 @@ public final class AssetHasher: Sendable {
         try await withCheckedThrowingContinuation { continuation in
             var collectedData = Data()
             let options = PHAssetResourceRequestOptions()
-            options.isNetworkAccessAllowed = false  // Don't download from iCloud for hashing
+            options.isNetworkAccessAllowed = true  // Allow iCloud download so we can hash the original
 
             PHAssetResourceManager.default().requestData(
                 for: resource,

@@ -78,7 +78,12 @@ public final class UploadEngine: ObservableObject {
                 let uploadQueue = await fetchAssetsInState(.queuedForUpload)
                 if uploadQueue.isEmpty {
                     // Nothing left to do
-                    log.info("Upload engine: no more queued assets", category: .upload)
+                    log.info("Upload engine: no queued assets found", category: .upload)
+                    ActivityLogService.shared.log(
+                        level: .warning,
+                        category: .upload,
+                        message: "Upload engine found no queued assets to process"
+                    )
                     break
                 }
 
@@ -159,6 +164,12 @@ public final class UploadEngine: ObservableObject {
 
         } catch {
             log.error("Hash failed for \(id): \(error.localizedDescription)", category: .upload)
+            ActivityLogService.shared.log(
+                level: .error,
+                category: .upload,
+                message: "Hash failed: \(error.localizedDescription)",
+                assetLocalIdentifier: id
+            )
             await handleAssetError(id: id, error: error)
         }
     }
@@ -281,6 +292,12 @@ public final class UploadEngine: ObservableObject {
 
         } catch {
             log.error("Upload failed for \(id): \(error.localizedDescription)", category: .upload)
+            ActivityLogService.shared.log(
+                level: .error,
+                category: .upload,
+                message: "Upload failed for \(asset.originalFilename ?? id): \(error.localizedDescription)",
+                assetLocalIdentifier: id
+            )
             await handleAssetError(id: id, error: error)
         }
     }
@@ -319,7 +336,7 @@ public final class UploadEngine: ObservableObject {
         try await withCheckedThrowingContinuation { continuation in
             var collectedData = Data()
             let options = PHAssetResourceRequestOptions()
-            options.isNetworkAccessAllowed = false  // Don't auto-download from iCloud
+            options.isNetworkAccessAllowed = true  // Allow iCloud download for upload
 
             PHAssetResourceManager.default().requestData(
                 for: resource,

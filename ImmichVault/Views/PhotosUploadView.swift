@@ -477,14 +477,23 @@ struct PhotosUploadView: View {
             }
             .frame(width: 90, alignment: .trailing)
 
-            // Status badge
+            // Status badge — skip reasons take priority, then DB upload state
             Group {
-                if asset.isIncluded {
-                    IVStatusBadge("Ready", status: .success)
-                } else if asset.skipReasons.count == 1 {
-                    IVStatusBadge(asset.skipReasons[0].title, status: .idle)
+                if !asset.skipReasons.isEmpty {
+                    // Determine the most descriptive status from skip reasons
+                    if asset.skipReasons.contains(where: { if case .alreadyUploaded = $0 { return true }; return false }) {
+                        IVStatusBadge("Duplicate", status: .idle)
+                    } else if asset.skipReasons.contains(where: { if case .neverReuploadFlagged = $0 { return true }; return false }) {
+                        IVStatusBadge("Never Upload", status: .idle)
+                    } else if asset.skipReasons.count == 1 {
+                        IVStatusBadge("Excluded", status: .warning)
+                    } else {
+                        IVStatusBadge("Excluded (\(asset.skipReasons.count))", status: .warning)
+                    }
+                } else if let state = asset.uploadState, state != .idle {
+                    IVStatusBadge(state.label, status: state.statusBadgeType)
                 } else {
-                    IVStatusBadge("\(asset.skipReasons.count) reasons", status: .idle)
+                    IVStatusBadge("Ready", status: .success)
                 }
             }
             .frame(width: 130, alignment: .center)
@@ -493,7 +502,7 @@ struct PhotosUploadView: View {
         .padding(.vertical, IVSpacing.sm)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(asset.assetType.label), \(asset.metadata.originalFilename ?? "Unknown"), \(asset.isIncluded ? "Ready" : "Skipped")")
+        .accessibilityLabel("\(asset.assetType.label), \(asset.metadata.originalFilename ?? "Unknown"), \(asset.skipReasons.isEmpty ? (asset.uploadState?.label ?? "Ready") : "Excluded")")
     }
 
     // MARK: - Context Menu

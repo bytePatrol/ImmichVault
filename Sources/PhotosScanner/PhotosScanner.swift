@@ -91,7 +91,19 @@ public final class PhotosScanner: @unchecked Sendable {
         // and filtered separately in post-processing
 
         if !mediaPredicates.isEmpty {
-            fetchOptions.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: mediaPredicates)
+            // Combine media type predicate (OR) with optional date predicate (AND)
+            var topLevelPredicates: [NSPredicate] = [
+                NSCompoundPredicate(orPredicateWithSubpredicates: mediaPredicates)
+            ]
+
+            // Apply start date at the fetch level so PhotoKit filters at the DB layer
+            if let startDate = filters.startDate {
+                topLevelPredicates.append(
+                    NSPredicate(format: "creationDate >= %@", startDate as NSDate)
+                )
+            }
+
+            fetchOptions.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: topLevelPredicates)
         } else {
             // No media types selected — nothing to scan
             return ScanResult(
@@ -242,6 +254,9 @@ public final class PhotosScanner: @unchecked Sendable {
             skipReasons.append(.sharedLibraryAsset)
         }
 
+        // Estimate file size from primary resource
+        let estimatedFileSize = Self.estimateFileSize(from: resourceTypes)
+
         // Gather metadata snapshot
         let metadata = AssetMetadataSnapshot(
             creationDate: creationDate,
@@ -249,6 +264,7 @@ public final class PhotosScanner: @unchecked Sendable {
             width: phAsset.pixelWidth,
             height: phAsset.pixelHeight,
             duration: mediaType == .video ? phAsset.duration : nil,
+            fileSize: estimatedFileSize,
             isFavorite: phAsset.isFavorite,
             isHidden: phAsset.isHidden,
             isBurst: phAsset.representsBurst,
@@ -291,6 +307,13 @@ public final class PhotosScanner: @unchecked Sendable {
     private static func originalFilename(for asset: PHAsset) -> String? {
         let resources = PHAssetResource.assetResources(for: asset)
         return resources.first?.originalFilename
+    }
+
+    private static func estimateFileSize(from resources: [PHAssetResource]) -> Int64? {
+        // Use the primary resource's fileSize via KVC (widely used, not public API on the property)
+        guard let primary = resources.first else { return nil }
+        let size = (primary.value(forKey: "fileSize") as? Int64) ?? 0
+        return size > 0 ? size : nil
     }
 
     private static func isScreenRecording(_ asset: PHAsset) -> Bool {
@@ -418,6 +441,9 @@ public struct ScannedAsset: Identifiable, Sendable {
     public let isICloudPlaceholder: Bool
     public let isLocallyAvailable: Bool
 
+    /// Upload state from the database (nil if not yet tracked).
+    public var uploadState: UploadState?
+
     /// True if no filters excluded this asset.
     public var isIncluded: Bool { skipReasons.isEmpty }
 }
@@ -429,6 +455,7 @@ public struct AssetMetadataSnapshot: Sendable {
     public let width: Int
     public let height: Int
     public let duration: TimeInterval?
+    public let fileSize: Int64?
     public let isFavorite: Bool
     public let isHidden: Bool
     public let isBurst: Bool
@@ -444,6 +471,12 @@ public struct AssetMetadataSnapshot: Sendable {
     /// Human-readable resolution string.
     public var resolutionString: String {
         "\(width) × \(height)"
+    }
+
+    /// Human-readable file size string.
+    public var fileSizeString: String? {
+        guard let fileSize else { return nil }
+        return ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
     }
 
     /// Human-readable duration string for videos.

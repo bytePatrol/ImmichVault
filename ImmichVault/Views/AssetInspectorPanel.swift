@@ -92,6 +92,10 @@ struct AssetInspectorPanel: View {
 
             metadataRow(label: "Resolution", value: asset.metadata.resolutionString)
 
+            if let sizeStr = asset.metadata.fileSizeString {
+                metadataRow(label: "File Size", value: sizeStr)
+            }
+
             if let dur = asset.metadata.durationString {
                 metadataRow(label: "Duration", value: dur)
             }

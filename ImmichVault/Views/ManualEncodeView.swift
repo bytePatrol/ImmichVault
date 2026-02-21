@@ -3,19 +3,23 @@ import SwiftUI
 // MARK: - Manual Encode View
 // Direct encode workflow: enter an Immich asset ID, validate, configure
 // encoding parameters, and queue a transcode + replace job.
+// Title lives in OptimizerContainerView's unified toolbar.
 
 struct ManualEncodeView: View {
-    @StateObject private var viewModel = ManualEncodeViewModel()
+    @ObservedObject var viewModel: ManualEncodeViewModel
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var appState: AppState
 
     var body: some View {
         ScrollView {
             VStack(spacing: IVSpacing.xl) {
-                headerSection
-                assetSection
+                IVGroupedPanel("ASSET") {
+                    assetContent
+                }
                 if viewModel.validatedAsset != nil {
-                    encodingSection
+                    IVGroupedPanel("ENCODING") {
+                        encodingContent
+                    }
                     actionSection
                 }
             }
@@ -26,26 +30,10 @@ struct ManualEncodeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    // MARK: - Header
+    // MARK: - Asset Content
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.xs) {
-            Text("Manual Encode")
-                .font(IVFont.displayMedium)
-                .foregroundColor(.ivTextPrimary)
-            Text("Enter an Immich video asset ID to transcode and replace the original.")
-                .font(IVFont.caption)
-                .foregroundColor(.ivTextTertiary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: - Asset Section
-
-    private var assetSection: some View {
+    private var assetContent: some View {
         VStack(alignment: .leading, spacing: IVSpacing.md) {
-            sectionLabel("ASSET")
-
             HStack(spacing: IVSpacing.sm) {
                 TextField("Immich asset ID or URL", text: $viewModel.assetInput)
                     .textFieldStyle(.roundedBorder)
@@ -80,7 +68,6 @@ struct ManualEncodeView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .sectionCard()
         .animation(.easeInOut(duration: 0.2), value: viewModel.validatedAsset?.id)
         .animation(.easeInOut(duration: 0.2), value: viewModel.validationError)
     }
@@ -161,12 +148,10 @@ struct ManualEncodeView: View {
         }
     }
 
-    // MARK: - Encoding Section
+    // MARK: - Encoding Content
 
-    private var encodingSection: some View {
+    private var encodingContent: some View {
         VStack(alignment: .leading, spacing: IVSpacing.md) {
-            sectionLabel("ENCODING")
-
             Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.sm) {
                 GridRow {
                     Text("Codec")
@@ -301,7 +286,6 @@ struct ManualEncodeView: View {
                 .animation(.easeInOut(duration: 0.15), value: estimated)
             }
         }
-        .sectionCard()
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
@@ -384,13 +368,6 @@ struct ManualEncodeView: View {
     }
 
     // MARK: - Helpers
-
-    private func sectionLabel(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 9, weight: .bold))
-            .foregroundColor(.ivTextSecondary)
-            .tracking(1.2)
-    }
 
     private func metaLabel(_ text: String) -> some View {
         Text(text)

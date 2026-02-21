@@ -2,252 +2,156 @@ import SwiftUI
 
 // MARK: - Optimizer View
 // Video optimization screen: discover oversized videos in Immich, review candidates,
-// and queue transcode + replace jobs. Follows native macOS patterns with toolbar,
-// table, status bar, inspector panel, and context menus.
+// and queue transcode + replace jobs. Title and action buttons live in the container toolbar.
 
 struct OptimizerView: View {
-    @StateObject private var viewModel = OptimizerViewModel()
+    @ObservedObject var viewModel: OptimizerViewModel
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        HSplitView {
-            // Main content
-            VStack(spacing: 0) {
-                optimizerToolbar
-                Divider()
-
-                if viewModel.candidates.isEmpty && !viewModel.isDiscovering {
-                    emptyState
-                } else if viewModel.isDiscovering {
-                    discoveryProgressView
-                } else {
-                    candidateTable
-                }
-
-                // Bottom status bar
-                if !viewModel.candidates.isEmpty || viewModel.isProcessing {
-                    statusBar
-                }
-            }
-            .frame(minWidth: 560)
-
-            // Inspector panel
-            if viewModel.showInspector, let candidate = viewModel.selectedCandidate {
-                CandidateInspectorPanel(
-                    candidate: candidate,
-                    preset: viewModel.effectivePreset,
-                    provider: viewModel.selectedProvider,
-                    estimatedCost: candidateEstimatedCost(candidate),
-                    matchedRule: viewModel.ruleMatches[candidate.id],
-                    onTranscodeNow: {
-                        viewModel.transcodeNow(candidate.id)
-                    }
-                )
-                .frame(minWidth: 280, idealWidth: 320, maxWidth: 380)
-            }
-        }
-        .sheet(isPresented: $viewModel.showRulesEditor) {
-            RulesEditorView()
-        }
-    }
-
-    // MARK: - Toolbar
-
-    private var optimizerToolbar: some View {
         VStack(spacing: 0) {
-            headerTitleRow
-                .padding(.bottom, IVSpacing.lg)
-            headerConfigSections
+            configPanel
+            headerBanners
+            Divider()
+
             if !viewModel.candidates.isEmpty {
                 headerSearchRow
-                    .padding(.top, IVSpacing.sm)
+                Divider()
             }
-            headerBanners
-                .padding(.top, IVSpacing.sm)
+
+            if viewModel.candidates.isEmpty && !viewModel.isDiscovering {
+                emptyState
+            } else if viewModel.isDiscovering {
+                discoveryProgressView
+            } else {
+                candidateTable
+            }
+
+            // Bottom status bar
+            if !viewModel.candidates.isEmpty || viewModel.isProcessing {
+                statusBar
+            }
+        }
+        .frame(minWidth: 560)
+    }
+
+    // MARK: - Config Panel
+
+    private var configPanel: some View {
+        HStack(alignment: .top, spacing: IVSpacing.lg) {
+            IVGroupedPanel("FILTERS") {
+                filtersContent
+            }
+            IVGroupedPanel("ENCODING") {
+                encodingContent
+            }
         }
         .padding(.horizontal, IVSpacing.lg)
-        .padding(.top, IVSpacing.md)
-        .padding(.bottom, IVSpacing.sm)
-        .background(Color.ivSurface.opacity(0.35))
-        .overlay(alignment: .bottom) {
-            Divider().opacity(0.4)
-        }
+        .padding(.vertical, IVSpacing.lg)
     }
 
-    // MARK: - Header: Title Row
+    // MARK: - Filters Content
 
-    private var headerTitleRow: some View {
-        HStack(alignment: .top) {
-            // Left: title block with breathing room below
-            VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                Text("Video Optimizer")
-                    .font(IVFont.displayMedium)
-                    .foregroundColor(.ivTextPrimary)
-                Text("Find oversized videos and transcode to save space")
+    private var filtersContent: some View {
+        Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.sm) {
+            GridRow {
+                Text("Min Size")
+                    .gridColumnAlignment(.trailing)
+                Stepper(
+                    "\(viewModel.sizeThresholdMB) MB",
+                    value: $viewModel.sizeThresholdMB,
+                    in: 50...5000,
+                    step: 50
+                )
+                .font(IVFont.mono)
+            }
+
+            GridRow {
+                Text("After")
+                datePickerOrClear(
+                    date: $viewModel.dateAfter,
+                    placeholder: "Any"
+                )
+            }
+
+            GridRow {
+                Text("Before")
+                datePickerOrClear(
+                    date: $viewModel.dateBefore,
+                    placeholder: "Any"
+                )
+            }
+        }
+        .font(IVFont.captionMedium)
+        .foregroundColor(.ivTextSecondary)
+        .controlSize(.small)
+    }
+
+    // MARK: - Encoding Content
+
+    private var encodingContent: some View {
+        Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.sm) {
+            GridRow {
+                Text("Preset")
+                    .gridColumnAlignment(.trailing)
+                Picker("Preset", selection: $viewModel.selectedPreset) {
+                    ForEach(TranscodePreset.allPresets) { preset in
+                        Text(preset.name).tag(preset)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .font(IVFont.caption)
+            }
+
+            GridRow {
+                Text("Provider")
+                HStack(spacing: IVSpacing.xs) {
+                    Picker("Provider", selection: $viewModel.selectedProvider) {
+                        ForEach(TranscodeProviderType.allCases, id: \.self) { provider in
+                            Text(provider.label).tag(provider)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
                     .font(IVFont.caption)
-                    .foregroundColor(.ivTextTertiary)
-                    .opacity(0.7)
-            }
 
-            Spacer(minLength: IVSpacing.xl)
-
-            // Right: actions — two tiers
-            VStack(alignment: .trailing, spacing: IVSpacing.xs) {
-                // Primary actions
-                HStack(spacing: IVSpacing.sm) {
-                    if viewModel.isProcessing {
-                        Button {
-                            viewModel.stopTranscoding()
-                        } label: {
-                            Label("Stop", systemImage: "stop.circle")
-                                .font(IVFont.bodyMedium)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.ivError)
-
-                        if let progress = viewModel.processingProgress {
-                            HStack(spacing: IVSpacing.xs) {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                Text(progress.description)
-                                    .font(IVFont.captionMedium)
-                                    .foregroundColor(.ivTextSecondary)
-                            }
-                        }
-                    } else if !viewModel.candidates.isEmpty && viewModel.selectedCandidateCount > 0 {
-                        Button {
-                            viewModel.startTranscoding()
-                        } label: {
-                            Label(
-                                "Queue Selected (\(viewModel.selectedCandidateCount))",
-                                systemImage: "wand.and.stars"
-                            )
-                            .font(IVFont.bodyMedium)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
-                    }
+                    Circle()
+                        .fill(providerHealthColor)
+                        .frame(width: 6, height: 6)
+                        .help(providerHealthTooltip)
+                        .accessibilityLabel(providerHealthTooltip)
 
                     Button {
-                        Task { await viewModel.scanForCandidates() }
+                        Task { await viewModel.checkProviderHealth() }
                     } label: {
-                        Label(
-                            viewModel.isDiscovering ? "Scanning..." : "Scan Immich",
-                            systemImage: "magnifyingglass"
-                        )
-                        .font(IVFont.caption)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(.ivTextSecondary)
-                    .controlSize(.small)
-                    .disabled(viewModel.isDiscovering || viewModel.isProcessing)
-                    .keyboardShortcut("r", modifiers: .command)
-                }
-
-                // Secondary / utility actions
-                HStack(spacing: IVSpacing.md) {
-                    Button {
-                        viewModel.showRulesEditor = true
-                    } label: {
-                        Label("Rules", systemImage: "list.bullet.rectangle")
+                        Text("Test")
                             .font(IVFont.caption)
                     }
                     .buttonStyle(.borderless)
-                    .foregroundColor(.ivTextTertiary)
-                    .help("Edit Transcode Rules")
+                    .foregroundColor(.ivAccent)
+                }
+            }
 
-                    Divider()
-                        .frame(height: 10)
-                        .opacity(0.5)
-
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            viewModel.showInspector.toggle()
-                        }
-                    } label: {
-                        Label("Inspector", systemImage: "sidebar.trailing")
-                            .font(IVFont.caption)
-                            .foregroundColor(viewModel.showInspector ? .ivAccent : .ivTextTertiary)
+            // Custom preset controls — rendered inside encoding when active
+            if viewModel.isCustomPreset {
+                GridRow {
+                    Text("Codec")
+                    Picker("Codec", selection: $viewModel.customCodec) {
+                        Text("H.264").tag(VideoCodec.h264)
+                        Text("H.265").tag(VideoCodec.h265)
                     }
-                    .buttonStyle(.borderless)
-                    .help("Toggle Inspector")
-                    .keyboardShortcut("i", modifiers: .command)
-                }
-            }
-        }
-    }
-
-    // MARK: - Header: Config Sections
-
-    private var headerConfigSections: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: IVSpacing.md) {
-                filtersSection
-                encodingSection
-            }
-            VStack(spacing: IVSpacing.sm) {
-                filtersSection
-                encodingSection
-            }
-        }
-    }
-
-    // MARK: Filters Section
-
-    private var filtersSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.xs) {
-            sectionLabel("FILTERS")
-
-            Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.xxs) {
-                GridRow {
-                    Text("Min Size")
-                        .gridColumnAlignment(.trailing)
-                    Stepper(
-                        "\(viewModel.sizeThresholdMB) MB",
-                        value: $viewModel.sizeThresholdMB,
-                        in: 50...5000,
-                        step: 50
-                    )
-                    .font(IVFont.mono)
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 140)
                 }
 
                 GridRow {
-                    Text("After")
-                    datePickerOrClear(
-                        date: $viewModel.dateAfter,
-                        placeholder: "Any"
-                    )
-                }
-
-                GridRow {
-                    Text("Before")
-                    datePickerOrClear(
-                        date: $viewModel.dateBefore,
-                        placeholder: "Any"
-                    )
-                }
-            }
-            .font(IVFont.captionMedium)
-            .foregroundColor(.ivTextSecondary)
-            .controlSize(.small)
-        }
-        .sectionCard()
-    }
-
-    // MARK: Encoding Section
-
-    private var encodingSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.xs) {
-            sectionLabel("ENCODING")
-
-            Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.xxs) {
-                GridRow {
-                    Text("Preset")
-                        .gridColumnAlignment(.trailing)
-                    Picker("Preset", selection: $viewModel.selectedPreset) {
-                        ForEach(TranscodePreset.allPresets) { preset in
-                            Text(preset.name).tag(preset)
+                    Text("Resolution")
+                    Picker("Resolution", selection: $viewModel.customResolution) {
+                        ForEach(TargetResolution.allCases) { res in
+                            Text(res.label).tag(res)
                         }
                     }
                     .labelsHidden()
@@ -256,92 +160,36 @@ struct OptimizerView: View {
                 }
 
                 GridRow {
-                    Text("Provider")
-                    HStack(spacing: IVSpacing.xs) {
-                        Picker("Provider", selection: $viewModel.selectedProvider) {
-                            ForEach(TranscodeProviderType.allCases, id: \.self) { provider in
-                                Text(provider.label).tag(provider)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .font(IVFont.caption)
+                    Text("CRF")
+                    HStack(spacing: IVSpacing.xxs) {
+                        Slider(
+                            value: Binding(
+                                get: { Double(viewModel.customCRF) },
+                                set: { viewModel.customCRF = Int($0) }
+                            ),
+                            in: 18...35,
+                            step: 1
+                        )
+                        .frame(minWidth: 80, maxWidth: 120)
 
-                        Circle()
-                            .fill(providerHealthColor)
-                            .frame(width: 8, height: 8)
-                            .help(providerHealthTooltip)
-                            .accessibilityLabel(providerHealthTooltip)
+                        Text("\(viewModel.customCRF)")
+                            .font(IVFont.mono)
+                            .foregroundColor(.ivTextPrimary)
+                            .frame(width: 20, alignment: .trailing)
+                            .monospacedDigit()
 
-                        Button {
-                            Task { await viewModel.checkProviderHealth() }
-                        } label: {
-                            Text("Test")
-                                .font(IVFont.caption)
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundColor(.ivAccent)
-                    }
-                }
-
-                // Custom preset controls — rendered inside encoding when active
-                if viewModel.isCustomPreset {
-                    GridRow {
-                        Text("Codec")
-                        Picker("Codec", selection: $viewModel.customCodec) {
-                            Text("H.264").tag(VideoCodec.h264)
-                            Text("H.265").tag(VideoCodec.h265)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(maxWidth: 140)
-                    }
-
-                    GridRow {
-                        Text("Resolution")
-                        Picker("Resolution", selection: $viewModel.customResolution) {
-                            ForEach(TargetResolution.allCases) { res in
-                                Text(res.label).tag(res)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .font(IVFont.caption)
-                    }
-
-                    GridRow {
-                        Text("CRF")
-                        HStack(spacing: IVSpacing.xxs) {
-                            Slider(
-                                value: Binding(
-                                    get: { Double(viewModel.customCRF) },
-                                    set: { viewModel.customCRF = Int($0) }
-                                ),
-                                in: 18...35,
-                                step: 1
-                            )
-                            .frame(minWidth: 80, maxWidth: 120)
-
-                            Text("\(viewModel.customCRF)")
-                                .font(IVFont.mono)
-                                .foregroundColor(.ivTextPrimary)
-                                .frame(width: 20, alignment: .trailing)
-                                .monospacedDigit()
-
-                            Text(crfQualityLabel(viewModel.customCRF))
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(crfQualityColor(viewModel.customCRF))
-                                .textCase(.uppercase)
-                                .frame(width: 52, alignment: .leading)
-                        }
+                        Text(crfQualityLabel(viewModel.customCRF))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(crfQualityColor(viewModel.customCRF))
+                            .textCase(.uppercase)
+                            .frame(width: 52, alignment: .leading)
                     }
                 }
             }
-            .font(IVFont.captionMedium)
-            .foregroundColor(.ivTextSecondary)
-            .controlSize(.small)
         }
-        .sectionCard()
+        .font(IVFont.captionMedium)
+        .foregroundColor(.ivTextSecondary)
+        .controlSize(.small)
     }
 
     // MARK: - Header: Search & Sort Row
@@ -381,6 +229,8 @@ struct OptimizerView: View {
             .frame(width: 140)
             .font(IVFont.caption)
         }
+        .padding(.horizontal, IVSpacing.lg)
+        .padding(.vertical, IVSpacing.sm)
     }
 
     /// Unified Select All / Deselect All (single definition).
@@ -404,55 +254,51 @@ struct OptimizerView: View {
 
     @ViewBuilder
     private var headerBanners: some View {
-        if let error = viewModel.errorMessage {
-            HStack(spacing: IVSpacing.sm) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.ivError)
-                Text(error)
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivError)
-                Spacer()
-                Button("Dismiss") {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        viewModel.errorMessage = nil
+        if viewModel.errorMessage != nil || (isCloudProvider && !TranscodeEngine.isProviderConfigured(viewModel.selectedProvider)) {
+            VStack(spacing: IVSpacing.xs) {
+                if let error = viewModel.errorMessage {
+                    HStack(spacing: IVSpacing.sm) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.ivError)
+                        Text(error)
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivError)
+                        Spacer()
+                        Button("Dismiss") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                viewModel.errorMessage = nil
+                            }
+                        }
+                        .font(IVFont.caption)
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(IVSpacing.sm)
+                    .background {
+                        RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                            .fill(Color.ivError.opacity(0.08))
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                if isCloudProvider && !TranscodeEngine.isProviderConfigured(viewModel.selectedProvider) {
+                    HStack(spacing: IVSpacing.sm) {
+                        Image(systemName: "key.fill")
+                            .foregroundColor(.ivWarning)
+                        Text("\(viewModel.selectedProvider.label) requires an API key. Configure it in Settings \u{2192} Provider API Keys.")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivWarning)
+                        Spacer()
+                    }
+                    .padding(IVSpacing.sm)
+                    .background {
+                        RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                            .fill(Color.ivWarning.opacity(0.08))
                     }
                 }
-                .font(IVFont.caption)
-                .buttonStyle(.borderless)
             }
-            .padding(IVSpacing.sm)
-            .background {
-                RoundedRectangle(cornerRadius: IVCornerRadius.sm)
-                    .fill(Color.ivError.opacity(0.08))
-            }
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .padding(.horizontal, IVSpacing.lg)
+            .padding(.top, IVSpacing.xs)
         }
-
-        if isCloudProvider && !TranscodeEngine.isProviderConfigured(viewModel.selectedProvider) {
-            HStack(spacing: IVSpacing.sm) {
-                Image(systemName: "key.fill")
-                    .foregroundColor(.ivWarning)
-                Text("\(viewModel.selectedProvider.label) requires an API key. Configure it in Settings \u{2192} Provider API Keys.")
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivWarning)
-                Spacer()
-            }
-            .padding(IVSpacing.sm)
-            .background {
-                RoundedRectangle(cornerRadius: IVCornerRadius.sm)
-                    .fill(Color.ivWarning.opacity(0.08))
-            }
-        }
-    }
-
-    // MARK: - Section Helpers
-
-    /// Uppercase tracking section label used by FILTERS and ENCODING.
-    private func sectionLabel(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 9, weight: .bold))
-            .foregroundColor(.ivTextSecondary)
-            .tracking(1.2)
     }
 
     // MARK: - Date Picker Helper
@@ -547,7 +393,7 @@ struct OptimizerView: View {
                         candidateRow(candidate)
                             .background(
                                 viewModel.selectedCandidateID == candidate.id
-                                    ? Color.ivAccent.opacity(0.12)
+                                    ? Color.ivAccent.opacity(0.08)
                                     : Color.clear
                             )
                             .onTapGesture(count: 2) {
@@ -643,10 +489,8 @@ struct OptimizerView: View {
                 .foregroundColor(.ivTextPrimary)
                 .frame(width: 80, alignment: .trailing)
 
-            // Codec
-            Text(candidate.detail.codec?.uppercased() ?? "--")
-                .font(IVFont.monoSmall)
-                .foregroundColor(.ivTextSecondary)
+            // Codec badge
+            codecBadge(candidate.detail.codec)
                 .frame(width: 70, alignment: .center)
 
             // Resolution
@@ -668,7 +512,7 @@ struct OptimizerView: View {
                 .frame(width: 80, alignment: .trailing)
 
             // Savings %
-            Text(String(format: "%.0f%%", candidate.savingsPercent))
+            Text(String(format: "-%.0f%%", candidate.savingsPercent))
                 .font(IVFont.captionMedium)
                 .foregroundColor(.ivSuccess)
                 .frame(width: 60, alignment: .trailing)
@@ -752,85 +596,89 @@ struct OptimizerView: View {
                 .background(Color.ivAccent.opacity(0.06))
             }
 
-            // Main status bar
-            HStack(spacing: IVSpacing.lg) {
-                HStack(spacing: IVSpacing.xs) {
-                    Circle()
-                        .fill(Color.purple)
-                        .frame(width: 6, height: 6)
-                    Text("\(viewModel.candidates.count) candidates")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextSecondary)
-                }
+            Divider()
 
-                HStack(spacing: IVSpacing.xs) {
-                    Circle()
-                        .fill(Color.ivAccent)
-                        .frame(width: 6, height: 6)
-                    Text("\(viewModel.selectedCandidateCount) selected")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextSecondary)
-                }
-
-                if !viewModel.rules.isEmpty {
-                    HStack(spacing: IVSpacing.xs) {
-                        Circle()
-                            .fill(Color.orange)
-                            .frame(width: 6, height: 6)
-                        Text("\(viewModel.matchedCandidateCount) matched rules")
-                            .font(IVFont.caption)
-                            .foregroundColor(.ivTextSecondary)
-                    }
-                }
-
+            // Main status bar — plain text with middle-dot separators
+            HStack(spacing: IVSpacing.sm) {
+                statusItems
                 Spacer()
+            }
+            .padding(.horizontal, IVSpacing.lg)
+            .padding(.vertical, IVSpacing.xs)
+            .background(Color.ivBackground)
+        }
+    }
 
-                if viewModel.selectedCandidateCount > 0 {
-                    HStack(spacing: IVSpacing.xs) {
-                        Image(systemName: "arrow.down.circle")
-                            .font(.system(size: 9))
-                            .foregroundColor(.ivSuccess)
-                        Text("Est. savings: \(formattedBytes(viewModel.totalEstimatedSavings))")
-                            .font(IVFont.captionMedium)
-                            .foregroundColor(.ivSuccess)
-                    }
-                }
-
-                // Estimated cost for cloud providers
-                if isCloudProvider && viewModel.estimatedTotalCost > 0 {
-                    HStack(spacing: IVSpacing.xs) {
-                        Image(systemName: "dollarsign.circle")
-                            .font(.system(size: 9))
-                            .foregroundColor(.ivWarning)
-                        Text("Estimated cost: \(CostLedger.formatCost(viewModel.estimatedTotalCost))")
-                            .font(IVFont.captionMedium)
-                            .foregroundColor(.ivWarning)
-                    }
-                }
-
-                if viewModel.isProcessing {
-                    HStack(spacing: IVSpacing.xs) {
-                        Circle()
-                            .fill(Color.ivAccent)
-                            .frame(width: 6, height: 6)
-                        Text("Processing")
-                            .font(IVFont.captionMedium)
-                            .foregroundColor(.ivAccent)
-                    }
-                }
-
-                Text("Showing \(viewModel.filteredCandidates.count) of \(viewModel.candidates.count)")
+    @ViewBuilder
+    private var statusItems: some View {
+        let items = buildStatusItems()
+        ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+            if index > 0 {
+                Text("\u{00B7}")
                     .font(IVFont.caption)
                     .foregroundColor(.ivTextTertiary)
             }
-            .padding(.horizontal, IVSpacing.lg)
-            .padding(.vertical, IVSpacing.sm)
+            Text(item.text)
+                .font(IVFont.caption)
+                .foregroundColor(item.color)
         }
-        .background {
-            Rectangle()
-                .fill(Color.ivSurface)
-                .shadow(color: .black.opacity(0.04), radius: 1, y: -1)
+    }
+
+    private struct StatusItem {
+        let text: String
+        let color: Color
+    }
+
+    private func buildStatusItems() -> [StatusItem] {
+        var items: [StatusItem] = []
+
+        items.append(StatusItem(
+            text: "\(viewModel.candidates.count) candidates",
+            color: .ivTextTertiary
+        ))
+
+        items.append(StatusItem(
+            text: "\(viewModel.selectedCandidateCount) selected",
+            color: .ivTextTertiary
+        ))
+
+        if !viewModel.rules.isEmpty {
+            items.append(StatusItem(
+                text: "\(viewModel.matchedCandidateCount) matched rules",
+                color: .ivTextTertiary
+            ))
         }
+
+        if viewModel.selectedCandidateCount > 0 {
+            items.append(StatusItem(
+                text: "Est. savings: \(formattedBytes(viewModel.totalEstimatedSavings))",
+                color: .ivSuccess
+            ))
+        }
+
+        if isCloudProvider && viewModel.estimatedTotalCost > 0 {
+            items.append(StatusItem(
+                text: "Est. cost: \(CostLedger.formatCost(viewModel.estimatedTotalCost))",
+                color: .ivWarning
+            ))
+        }
+
+        if viewModel.isProcessing {
+            items.append(StatusItem(
+                text: "Processing",
+                color: .ivAccent
+            ))
+        }
+
+        // Only show filtered count when a filter is active
+        if viewModel.filteredCandidates.count != viewModel.candidates.count {
+            items.append(StatusItem(
+                text: "Showing \(viewModel.filteredCandidates.count) of \(viewModel.candidates.count)",
+                color: .ivTextTertiary
+            ))
+        }
+
+        return items
     }
 
     // MARK: - Helpers
@@ -866,13 +714,22 @@ struct OptimizerView: View {
         viewModel.selectedProvider != .local
     }
 
-    private func candidateEstimatedCost(_ candidate: TranscodeCandidate) -> Double? {
-        guard isCloudProvider else { return nil }
-        return CostLedger.shared.estimatedCostForCandidates(
-            [candidate],
-            providerType: viewModel.selectedProvider,
-            preset: viewModel.effectivePreset
-        )
+    // MARK: - Codec Badge
+
+    private func codecBadge(_ codec: String?) -> some View {
+        let label = codec?.uppercased() ?? "--"
+        let isHEVC = label.contains("HEVC") || label.contains("H265") || label.contains("H.265")
+        let badgeColor: Color = isHEVC ? .purple : .orange
+
+        return Text(isHEVC ? "HEVC" : label)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundColor(badgeColor)
+            .padding(.horizontal, IVSpacing.xs)
+            .padding(.vertical, IVSpacing.xxxs)
+            .background {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(badgeColor.opacity(0.12))
+            }
     }
 
     // MARK: - CRF Quality Helpers
@@ -934,7 +791,7 @@ struct CandidateInspectorPanel: View {
             HStack(spacing: IVSpacing.sm) {
                 Image(systemName: "film")
                     .font(.system(size: 22, weight: .light))
-                    .foregroundColor(.purple)
+                    .foregroundColor(.ivTextSecondary)
 
                 VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
                     Text(candidate.detail.originalFileName ?? "Unknown Video")
@@ -1018,10 +875,10 @@ struct CandidateInspectorPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(IVSpacing.md)
+        .padding(IVSpacing.lg)
         .background {
             RoundedRectangle(cornerRadius: IVCornerRadius.md)
-                .fill(Color.orange.opacity(0.06))
+                .fill(Color.orange.opacity(0.04))
         }
     }
 
@@ -1068,10 +925,10 @@ struct CandidateInspectorPanel: View {
                 .foregroundColor(.ivTextTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(IVSpacing.md)
+        .padding(IVSpacing.lg)
         .background {
             RoundedRectangle(cornerRadius: IVCornerRadius.md)
-                .fill(Color.ivSuccess.opacity(0.06))
+                .fill(Color.ivSuccess.opacity(0.04))
         }
     }
 
@@ -1110,5 +967,3 @@ struct CandidateInspectorPanel: View {
         }
     }
 }
-
-// SectionCardModifier is defined in DesignSystem.swift for reuse across views.

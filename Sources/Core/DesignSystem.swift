@@ -261,6 +261,37 @@ public struct IVSkeletonRow: View {
     }
 }
 
+// MARK: - Grouped Panel
+
+public struct IVGroupedPanel<Content: View>: View {
+    let title: String
+    let content: Content
+
+    public init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: IVSpacing.sm) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.ivTextTertiary)
+                .tracking(0.5)
+            content
+        }
+        .padding(IVSpacing.lg)
+        .background {
+            RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                .fill(Color.ivSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivBorder.opacity(0.3), lineWidth: 0.5)
+                )
+        }
+    }
+}
+
 // MARK: - Section Card Modifier
 
 struct SectionCardModifier: ViewModifier {

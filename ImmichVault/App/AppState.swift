@@ -47,28 +47,26 @@ enum NavigationItem: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .dashboard: return "gauge.with.dots.needle.33percent"
+        case .dashboard: return "square.grid.2x2"
         case .photosUpload: return "photo.on.rectangle.angled"
         case .optimizer: return "wand.and.stars"
-        case .jobs: return "list.clipboard"
-        case .logs: return "doc.text.magnifyingglass"
+        case .jobs: return "play.rectangle"
+        case .logs: return "list.bullet.rectangle"
         case .settings: return "gear"
         }
     }
 
     var section: NavigationSection {
         switch self {
-        case .dashboard: return .overview
-        case .photosUpload, .optimizer: return .workflows
-        case .jobs, .logs: return .monitoring
+        case .photosUpload, .optimizer, .jobs: return .library
+        case .dashboard, .logs: return .monitoring
         case .settings: return .system
         }
     }
 }
 
 enum NavigationSection: String, CaseIterable {
-    case overview = "Overview"
-    case workflows = "Workflows"
+    case library = "Library"
     case monitoring = "Monitoring"
     case system = "System"
 

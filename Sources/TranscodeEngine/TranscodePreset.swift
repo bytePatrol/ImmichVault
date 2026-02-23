@@ -299,13 +299,13 @@ public extension TranscodePreset {
     /// Balanced default: good compression with acceptable quality for most content.
     /// H.265 CRF 28, AAC 128k, MP4.
     static let `default` = TranscodePreset(
-        name: "Default",
+        name: "iPhone Default (HEVC CRF 28)",
         videoCodec: .h265,
         crf: 28,
         audioCodec: .aac,
         audioBitrate: "128k",
         container: "mp4",
-        description: "Balanced compression with good quality. Suitable for most videos."
+        description: "Balanced compression with good quality. Suitable for most iPhone videos."
     )
 
     /// High quality: minimal visible quality loss, moderate compression.

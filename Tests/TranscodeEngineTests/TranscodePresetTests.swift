@@ -7,7 +7,7 @@ final class TranscodePresetTests: XCTestCase {
 
     func testDefaultPresetValues() {
         let preset = TranscodePreset.default
-        XCTAssertEqual(preset.name, "Default")
+        XCTAssertEqual(preset.name, "iPhone Default (HEVC CRF 28)")
         XCTAssertEqual(preset.videoCodec, .h265)
         XCTAssertEqual(preset.crf, 28)
         XCTAssertEqual(preset.audioCodec, .aac)
@@ -59,7 +59,7 @@ final class TranscodePresetTests: XCTestCase {
 
     func testAllPresetsContainExpectedNames() {
         let names = TranscodePreset.allPresets.map(\.name)
-        XCTAssertTrue(names.contains("Default"))
+        XCTAssertTrue(names.contains("iPhone Default (HEVC CRF 28)"))
         XCTAssertTrue(names.contains("High Quality"))
         XCTAssertTrue(names.contains("Small File"))
         XCTAssertTrue(names.contains("Screen Recording"))

@@ -10,11 +10,16 @@ struct MainNavigationView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $appState.selectedNavItem)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
         } detail: {
             detailContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationSplitViewStyle(.balanced)
+        .onAppear {
+            // Reset any previously saved sidebar width that may be too narrow
+            resetSidebarWidthIfNeeded()
+        }
         .task {
             await checkConnection()
         }
@@ -53,6 +58,15 @@ struct MainNavigationView: View {
                 .opacity(appState.selectedNavItem == .settings ? 1 : 0)
                 .allowsHitTesting(appState.selectedNavItem == .settings)
                 .accessibilityHidden(appState.selectedNavItem != .settings)
+        }
+    }
+
+    /// Clear any persisted NSSplitView frames that may have saved a too-narrow sidebar.
+    private func resetSidebarWidthIfNeeded() {
+        for key in UserDefaults.standard.dictionaryRepresentation().keys {
+            if key.contains("NSSplitView") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
         }
     }
 
@@ -98,12 +112,14 @@ struct SidebarView: View {
     var body: some View {
         List(selection: $selection) {
             ForEach(NavigationSection.allCases, id: \.self) { section in
-                Section(section.rawValue) {
+                Section {
                     ForEach(section.items) { item in
                         NavigationLink(value: item) {
                             Label(item.label, systemImage: item.icon)
                         }
                     }
+                } header: {
+                    Text(section.rawValue.uppercased())
                 }
             }
         }

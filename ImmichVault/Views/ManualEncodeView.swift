@@ -20,6 +20,7 @@ struct ManualEncodeView: View {
                     IVGroupedPanel("ENCODING") {
                         encodingContent
                     }
+                    estimatedOutputSection
                     actionSection
                 }
             }
@@ -158,7 +159,7 @@ struct ManualEncodeView: View {
                         .gridColumnAlignment(.trailing)
                     Picker("Codec", selection: $viewModel.selectedCodec) {
                         Text("H.264").tag(VideoCodec.h264)
-                        Text("H.265").tag(VideoCodec.h265)
+                        Text("HEVC").tag(VideoCodec.h265)
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
@@ -169,7 +170,7 @@ struct ManualEncodeView: View {
                     Text("Resolution")
                     Picker("Resolution", selection: $viewModel.selectedResolution) {
                         ForEach(TargetResolution.allCases) { res in
-                            Text(res.label).tag(res)
+                            Text(resolutionLabel(res)).tag(res)
                         }
                     }
                     .labelsHidden()
@@ -179,114 +180,122 @@ struct ManualEncodeView: View {
 
                 GridRow {
                     Text("CRF")
-                    HStack(spacing: IVSpacing.xxs) {
+                    HStack(spacing: IVSpacing.sm) {
                         Slider(
                             value: Binding(
                                 get: { Double(viewModel.selectedCRF) },
                                 set: { viewModel.selectedCRF = Int($0) }
                             ),
-                            in: 18...35,
+                            in: 18...36,
                             step: 1
                         )
-                        .frame(minWidth: 100, maxWidth: 160)
+                        .frame(minWidth: 100, maxWidth: .infinity)
 
                         Text("\(viewModel.selectedCRF)")
                             .font(IVFont.mono)
                             .foregroundColor(.ivTextPrimary)
-                            .frame(width: 20, alignment: .trailing)
+                            .frame(width: 24, alignment: .trailing)
                             .monospacedDigit()
-
-                        Text(crfQualityLabel(viewModel.selectedCRF))
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(crfQualityColor(viewModel.selectedCRF))
-                            .textCase(.uppercase)
-                            .frame(width: 52, alignment: .leading)
                     }
                 }
 
                 GridRow {
                     Text("Speed")
                     Picker("Speed", selection: $viewModel.selectedSpeed) {
-                        ForEach(EncodeSpeed.allCases) { speed in
-                            Text(speed.label).tag(speed)
-                        }
+                        Text("Slow").tag(EncodeSpeed.slow)
+                        Text("Medium").tag(EncodeSpeed.medium)
+                        Text("Fast").tag(EncodeSpeed.fast)
                     }
                     .labelsHidden()
-                    .pickerStyle(.menu)
-                    .font(IVFont.caption)
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 200)
                 }
 
                 GridRow {
                     Text("Provider")
-                    Picker("Provider", selection: $viewModel.selectedProvider) {
-                        ForEach(TranscodeProviderType.allCases, id: \.self) { provider in
-                            Text(provider.label).tag(provider)
+                    HStack(spacing: IVSpacing.xs) {
+                        Circle()
+                            .fill(Color.ivSuccess)
+                            .frame(width: 6, height: 6)
+                        Picker("Provider", selection: $viewModel.selectedProvider) {
+                            ForEach(TranscodeProviderType.allCases, id: \.self) { provider in
+                                Text(provider.label).tag(provider)
+                            }
                         }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .font(IVFont.caption)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .font(IVFont.caption)
                 }
             }
-            .font(IVFont.captionMedium)
+            .font(.system(size: 13, weight: .regular))
             .foregroundColor(.ivTextSecondary)
             .controlSize(.small)
-
-            // Speed hint
-            Text(viewModel.selectedSpeed.hint)
-                .font(IVFont.caption)
-                .foregroundColor(.ivTextTertiary)
-                .padding(.top, IVSpacing.xxxs)
-
-            // Estimated output
-            if let estimated = viewModel.estimatedOutputSize, let asset = viewModel.validatedAsset,
-               let originalSize = asset.fileSize, originalSize > 0 {
-                Divider().opacity(0.3).padding(.vertical, IVSpacing.xxs)
-
-                HStack(spacing: IVSpacing.lg) {
-                    VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
-                        Text("ESTIMATED OUTPUT")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.ivTextTertiary)
-                            .tracking(1.0)
-                        Text(ByteCountFormatter.string(fromByteCount: estimated, countStyle: .file))
-                            .font(IVFont.headline)
-                            .foregroundColor(.ivTextPrimary)
-                    }
-
-                    if let savings = viewModel.estimatedSavingsPercent {
-                        VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
-                            Text("SAVINGS")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(.ivTextTertiary)
-                                .tracking(1.0)
-                            Text(String(format: "%.0f%%", savings))
-                                .font(IVFont.headline)
-                                .foregroundColor(savings > 0 ? .ivSuccess : .ivWarning)
-                        }
-                    }
-
-                    Spacer()
-
-                    VStack(alignment: .trailing, spacing: IVSpacing.xxxs) {
-                        Text("ORIGINAL")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.ivTextTertiary)
-                            .tracking(1.0)
-                        Text(ByteCountFormatter.string(fromByteCount: originalSize, countStyle: .file))
-                            .font(IVFont.body)
-                            .foregroundColor(.ivTextSecondary)
-                    }
-                }
-                .padding(IVSpacing.sm)
-                .background {
-                    RoundedRectangle(cornerRadius: IVCornerRadius.sm)
-                        .fill(Color.ivSuccess.opacity(0.05))
-                }
-                .animation(.easeInOut(duration: 0.15), value: estimated)
-            }
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    // MARK: - Estimated Output (three-column layout matching mockup)
+
+    @ViewBuilder
+    private var estimatedOutputSection: some View {
+        if let estimated = viewModel.estimatedOutputSize, let asset = viewModel.validatedAsset,
+           let originalSize = asset.fileSize, originalSize > 0 {
+            HStack(spacing: 0) {
+                // Est. Output column
+                VStack(spacing: IVSpacing.xxs) {
+                    Text("EST. OUTPUT")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.ivTextSecondary)
+                        .tracking(0.5)
+                    Text("~\(ByteCountFormatter.string(fromByteCount: estimated, countStyle: .file))")
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.ivSuccess)
+                    Text("from \(ByteCountFormatter.string(fromByteCount: originalSize, countStyle: .file))")
+                        .font(IVFont.monoSmall)
+                        .foregroundColor(.ivTextTertiary)
+                }
+                .frame(maxWidth: .infinity)
+
+                // Savings column
+                if let savings = viewModel.estimatedSavingsPercent {
+                    VStack(spacing: IVSpacing.xxs) {
+                        Text("SAVINGS")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.ivTextSecondary)
+                            .tracking(0.5)
+                        Text(String(format: "%.0f%%", savings))
+                            .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                            .foregroundColor(savings > 0 ? .ivSuccess : .ivWarning)
+                        Text("~\(ByteCountFormatter.string(fromByteCount: originalSize - estimated, countStyle: .file)) saved")
+                            .font(IVFont.monoSmall)
+                            .foregroundColor(.ivTextTertiary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                // Est. Time column
+                VStack(spacing: IVSpacing.xxs) {
+                    Text("EST. TIME")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.ivTextSecondary)
+                        .tracking(0.5)
+                    Text(estimatedTimeLabel(asset))
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.ivSuccess)
+                    Text(viewModel.selectedProvider == .local ? "VideoToolbox" : viewModel.selectedProvider.label)
+                        .font(IVFont.monoSmall)
+                        .foregroundColor(.ivTextTertiary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(IVSpacing.lg)
+            .background {
+                RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                    .fill(Color.ivSuccess.opacity(0.06))
+            }
+            .animation(.easeInOut(duration: 0.15), value: estimated)
+        }
     }
 
     // MARK: - Action Section
@@ -308,12 +317,11 @@ struct ManualEncodeView: View {
                             ProgressView()
                                 .scaleEffect(0.7)
                         }
-                        Label(
-                            viewModel.isCreatingJob ? "Creating Job..." : "Start Encode",
-                            systemImage: "wand.and.stars"
-                        )
-                        .font(IVFont.bodyMedium)
+                        Text(viewModel.isCreatingJob ? "Creating Job..." : "Start Encode")
+                            .font(.system(size: 15, weight: .semibold))
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, IVSpacing.xs)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -399,12 +407,44 @@ struct ManualEncodeView: View {
     }
 
     private func formatDuration(_ seconds: Double) -> String {
-        let mins = Int(seconds) / 60
-        let secs = Int(seconds) % 60
-        if mins > 0 {
-            return "\(mins)m \(secs)s"
+        let totalSeconds = Int(seconds)
+        let hours = totalSeconds / 3600
+        let mins = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, mins, secs)
         }
-        return "\(secs)s"
+        return String(format: "%d:%02d", mins, secs)
+    }
+
+    /// Resolution label with original dimensions when available.
+    private func resolutionLabel(_ res: TargetResolution) -> String {
+        if res == .keepSame, let asset = viewModel.validatedAsset,
+           let w = asset.width, let h = asset.height {
+            return "Original (\(w)x\(h))"
+        }
+        return res.label
+    }
+
+    /// Estimated encode time based on duration and speed setting.
+    private func estimatedTimeLabel(_ asset: ImmichClient.ImmichAssetDetail) -> String {
+        guard let duration = asset.duration, duration > 0 else { return "~? min" }
+        // Rough estimate: local HW encode ~2-4x realtime, SW ~0.5-1x
+        let speedMultiplier: Double
+        switch viewModel.selectedSpeed {
+        case .slow, .slower, .veryslow: speedMultiplier = 0.5
+        case .medium: speedMultiplier = 1.0
+        case .fast, .faster, .veryfast: speedMultiplier = 2.0
+        case .ultrafast, .superfast: speedMultiplier = 3.0
+        }
+
+        let isHardware = viewModel.selectedCodec == .h265
+        let baseMultiplier = isHardware ? 3.0 : 1.0
+        let estimatedSeconds = duration / (baseMultiplier * speedMultiplier)
+        let mins = Int(estimatedSeconds / 60)
+
+        if mins < 1 { return "~1 min" }
+        return "~\(mins) min"
     }
 
     private func crfQualityLabel(_ crf: Int) -> String {

@@ -275,6 +275,12 @@ public final class OptimizerViewModel: ObservableObject {
             // Auto-select all candidates
             selectedCandidateIDs = Set(allCandidates.map(\.id))
 
+            // Auto-open inspector and select first candidate when results found
+            if let first = allCandidates.first {
+                selectedCandidateID = first.id
+                showInspector = true
+            }
+
             // Compute estimated cost for cloud providers
             if selectedProvider != .local {
                 estimatedTotalCost = CostLedger.shared.estimatedCostForCandidates(

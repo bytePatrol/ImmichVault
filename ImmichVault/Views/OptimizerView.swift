@@ -9,16 +9,15 @@ struct OptimizerView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var appState: AppState
 
+    // Uniform 11px mono font for all table data cells (matches mockup)
+    private let cellMono = Font.system(size: 11, weight: .regular, design: .monospaced)
+    // 12px font for config labels (matches mockup's 12px)
+    private let configLabel = Font.system(size: 12, weight: .medium)
+
     var body: some View {
         VStack(spacing: 0) {
             configPanel
             headerBanners
-            Divider()
-
-            if !viewModel.candidates.isEmpty {
-                headerSearchRow
-                Divider()
-            }
 
             if viewModel.candidates.isEmpty && !viewModel.isDiscovering {
                 emptyState
@@ -43,9 +42,12 @@ struct OptimizerView: View {
             IVGroupedPanel("FILTERS") {
                 filtersContent
             }
+            .frame(maxWidth: .infinity)
+
             IVGroupedPanel("ENCODING") {
                 encodingContent
             }
+            .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, IVSpacing.lg)
         .padding(.vertical, IVSpacing.lg)
@@ -54,36 +56,28 @@ struct OptimizerView: View {
     // MARK: - Filters Content
 
     private var filtersContent: some View {
-        Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.sm) {
-            GridRow {
+        VStack(alignment: .leading, spacing: IVSpacing.sm) {
+            HStack {
                 Text("Min Size")
-                    .gridColumnAlignment(.trailing)
-                Stepper(
-                    "\(viewModel.sizeThresholdMB) MB",
-                    value: $viewModel.sizeThresholdMB,
-                    in: 50...5000,
-                    step: 50
-                )
-                .font(IVFont.mono)
+                    .font(configLabel)
+                    .frame(width: 72, alignment: .leading)
+                InlineStepper(value: $viewModel.sizeThresholdMB, range: 50...5000, step: 50, suffix: "MB")
             }
 
-            GridRow {
-                Text("After")
-                datePickerOrClear(
-                    date: $viewModel.dateAfter,
-                    placeholder: "Any"
-                )
+            HStack {
+                Text("After date")
+                    .font(configLabel)
+                    .frame(width: 72, alignment: .leading)
+                FilterDateField(date: $viewModel.dateAfter, placeholder: "Any")
             }
 
-            GridRow {
-                Text("Before")
-                datePickerOrClear(
-                    date: $viewModel.dateBefore,
-                    placeholder: "Any"
-                )
+            HStack {
+                Text("Before date")
+                    .font(configLabel)
+                    .frame(width: 72, alignment: .leading)
+                FilterDateField(date: $viewModel.dateBefore, placeholder: "Any")
             }
         }
-        .font(IVFont.captionMedium)
         .foregroundColor(.ivTextSecondary)
         .controlSize(.small)
     }
@@ -91,10 +85,11 @@ struct OptimizerView: View {
     // MARK: - Encoding Content
 
     private var encodingContent: some View {
-        Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.sm) {
-            GridRow {
+        VStack(alignment: .leading, spacing: IVSpacing.sm) {
+            HStack {
                 Text("Preset")
-                    .gridColumnAlignment(.trailing)
+                    .font(configLabel)
+                    .frame(width: 72, alignment: .leading)
                 Picker("Preset", selection: $viewModel.selectedPreset) {
                     ForEach(TranscodePreset.allPresets) { preset in
                         Text(preset.name).tag(preset)
@@ -102,12 +97,20 @@ struct OptimizerView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .font(IVFont.caption)
+                .font(.system(size: 12))
             }
 
-            GridRow {
+            HStack {
                 Text("Provider")
+                    .font(configLabel)
+                    .frame(width: 72, alignment: .leading)
                 HStack(spacing: IVSpacing.xs) {
+                    Circle()
+                        .fill(providerHealthColor)
+                        .frame(width: 6, height: 6)
+                        .help(providerHealthTooltip)
+                        .accessibilityLabel(providerHealthTooltip)
+
                     Picker("Provider", selection: $viewModel.selectedProvider) {
                         ForEach(TranscodeProviderType.allCases, id: \.self) { provider in
                             Text(provider.label).tag(provider)
@@ -115,29 +118,25 @@ struct OptimizerView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
-                    .font(IVFont.caption)
-
-                    Circle()
-                        .fill(providerHealthColor)
-                        .frame(width: 6, height: 6)
-                        .help(providerHealthTooltip)
-                        .accessibilityLabel(providerHealthTooltip)
+                    .font(.system(size: 12))
 
                     Button {
                         Task { await viewModel.checkProviderHealth() }
                     } label: {
                         Text("Test")
-                            .font(IVFont.caption)
+                            .font(.system(size: 11))
                     }
                     .buttonStyle(.borderless)
                     .foregroundColor(.ivAccent)
                 }
             }
 
-            // Custom preset controls — rendered inside encoding when active
+            // Custom preset controls
             if viewModel.isCustomPreset {
-                GridRow {
+                HStack {
                     Text("Codec")
+                        .font(configLabel)
+                        .frame(width: 72, alignment: .leading)
                     Picker("Codec", selection: $viewModel.customCodec) {
                         Text("H.264").tag(VideoCodec.h264)
                         Text("H.265").tag(VideoCodec.h265)
@@ -147,8 +146,10 @@ struct OptimizerView: View {
                     .frame(maxWidth: 140)
                 }
 
-                GridRow {
+                HStack {
                     Text("Resolution")
+                        .font(configLabel)
+                        .frame(width: 72, alignment: .leading)
                     Picker("Resolution", selection: $viewModel.customResolution) {
                         ForEach(TargetResolution.allCases) { res in
                             Text(res.label).tag(res)
@@ -156,11 +157,13 @@ struct OptimizerView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
-                    .font(IVFont.caption)
+                    .font(.system(size: 12))
                 }
 
-                GridRow {
+                HStack {
                     Text("CRF")
+                        .font(configLabel)
+                        .frame(width: 72, alignment: .leading)
                     HStack(spacing: IVSpacing.xxs) {
                         Slider(
                             value: Binding(
@@ -187,67 +190,8 @@ struct OptimizerView: View {
                 }
             }
         }
-        .font(IVFont.captionMedium)
         .foregroundColor(.ivTextSecondary)
         .controlSize(.small)
-    }
-
-    // MARK: - Header: Search & Sort Row
-
-    private var headerSearchRow: some View {
-        HStack(spacing: IVSpacing.sm) {
-            HStack(spacing: IVSpacing.xs) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.ivTextTertiary)
-                    .font(.system(size: 11))
-                TextField("Search by filename or codec...", text: $viewModel.filterText)
-                    .textFieldStyle(.plain)
-                    .font(IVFont.body)
-            }
-            .padding(.horizontal, IVSpacing.sm)
-            .padding(.vertical, IVSpacing.xs)
-            .background {
-                RoundedRectangle(cornerRadius: IVCornerRadius.sm)
-                    .fill(Color.ivSurface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: IVCornerRadius.sm)
-                            .stroke(Color.ivBorder, lineWidth: 0.5)
-                    )
-            }
-            .frame(maxWidth: 260)
-
-            Spacer()
-
-            selectionControls
-
-            Picker("Sort", selection: $viewModel.sortOrder) {
-                ForEach(OptimizerViewModel.CandidateSortOrder.allCases) { order in
-                    Text(order.rawValue).tag(order)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 140)
-            .font(IVFont.caption)
-        }
-        .padding(.horizontal, IVSpacing.lg)
-        .padding(.vertical, IVSpacing.sm)
-    }
-
-    /// Unified Select All / Deselect All (single definition).
-    private var selectionControls: some View {
-        HStack(spacing: IVSpacing.xs) {
-            Button("Select All") {
-                viewModel.selectAll()
-            }
-            .font(IVFont.caption)
-            .buttonStyle(.borderless)
-
-            Button("Deselect All") {
-                viewModel.deselectAll()
-            }
-            .font(IVFont.caption)
-            .buttonStyle(.borderless)
-        }
     }
 
     // MARK: - Header: Banners
@@ -301,48 +245,13 @@ struct OptimizerView: View {
         }
     }
 
-    // MARK: - Date Picker Helper
-
-    private func datePickerOrClear(date: Binding<Date?>, placeholder: String) -> some View {
-        HStack(spacing: IVSpacing.xxs) {
-            if let currentDate = date.wrappedValue {
-                DatePicker(
-                    "",
-                    selection: Binding(
-                        get: { currentDate },
-                        set: { date.wrappedValue = $0 }
-                    ),
-                    displayedComponents: [.date]
-                )
-                .labelsHidden()
-                .frame(width: 100)
-
-                Button {
-                    date.wrappedValue = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.ivTextTertiary)
-                }
-                .buttonStyle(.borderless)
-            } else {
-                Button(placeholder) {
-                    date.wrappedValue = Date()
-                }
-                .font(IVFont.caption)
-                .foregroundColor(.ivTextTertiary)
-                .buttonStyle(.borderless)
-            }
-        }
-    }
-
     // MARK: - Empty State
 
     private var emptyState: some View {
         IVEmptyState(
-            icon: "wand.and.stars",
+            icon: "sparkles",
             title: "Ready to Optimize",
-            message: "Configure your size threshold and date range, then click \"Scan Immich\" to find oversized videos that can be transcoded to save space.",
+            message: "Scan your Immich library to find large videos that can be re-encoded to save space. Configure your size threshold and date range above, then scan to discover candidates.",
             actionTitle: "Scan Immich"
         ) {
             Task { await viewModel.scanForCandidates() }
@@ -385,14 +294,16 @@ struct OptimizerView: View {
     private var candidateTable: some View {
         VStack(spacing: 0) {
             candidateTableHeader
-            Divider()
 
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(viewModel.filteredCandidates) { candidate in
+                        let isChecked = viewModel.selectedCandidateIDs.contains(candidate.id)
+                        let isFocused = viewModel.selectedCandidateID == candidate.id
+
                         candidateRow(candidate)
                             .background(
-                                viewModel.selectedCandidateID == candidate.id
+                                (isChecked || isFocused)
                                     ? Color.ivAccent.opacity(0.08)
                                     : Color.clear
                             )
@@ -409,8 +320,10 @@ struct OptimizerView: View {
                                 candidateContextMenu(candidate)
                             }
 
-                        Divider()
-                            .padding(.leading, IVSpacing.lg)
+                        // Full-width subtle divider between rows
+                        Rectangle()
+                            .fill(Color.white.opacity(0.04))
+                            .frame(height: 0.5)
                     }
                 }
             }
@@ -418,41 +331,41 @@ struct OptimizerView: View {
     }
 
     private var candidateTableHeader: some View {
-        HStack(spacing: 0) {
-            Image(systemName: "checkmark.square")
-                .font(.system(size: 11))
-                .foregroundColor(.ivTextTertiary)
-                .frame(width: 36, alignment: .center)
+        HStack(spacing: IVSpacing.sm) {
+            Image(systemName: "checkmark.square.fill")
+                .font(.system(size: 12))
+                .foregroundColor(.ivAccent)
+                .frame(width: 32, alignment: .center)
 
             Text("Filename")
                 .frame(minWidth: 120, alignment: .leading)
             Spacer()
             Text("Size")
-                .frame(width: 80, alignment: .trailing)
+                .frame(width: 72, alignment: .trailing)
             Text("Codec")
-                .frame(width: 70, alignment: .center)
+                .frame(width: 64, alignment: .center)
             Text("Resolution")
-                .frame(width: 90, alignment: .trailing)
+                .frame(width: 84, alignment: .trailing)
             Text("Duration")
-                .frame(width: 70, alignment: .trailing)
+                .frame(width: 64, alignment: .trailing)
             Text("Est. Output")
-                .frame(width: 80, alignment: .trailing)
+                .frame(width: 76, alignment: .trailing)
             Text("Savings")
-                .frame(width: 60, alignment: .trailing)
+                .frame(width: 56, alignment: .trailing)
             Text("Rule")
-                .frame(width: 90, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
         }
         .font(IVFont.captionMedium)
-        .foregroundColor(.ivTextTertiary)
-        .padding(.horizontal, IVSpacing.lg)
-        .padding(.vertical, IVSpacing.sm)
+        .foregroundColor(.ivTextSecondary)
+        .padding(.horizontal, IVSpacing.sm)
+        .padding(.vertical, IVSpacing.xs)
         .background(Color.ivSurface.opacity(0.5))
     }
 
     private func candidateRow(_ candidate: TranscodeCandidate) -> some View {
         let isSelected = viewModel.selectedCandidateIDs.contains(candidate.id)
 
-        return HStack(spacing: 0) {
+        return HStack(spacing: IVSpacing.sm) {
             // Checkbox
             Button {
                 viewModel.toggleCandidateSelection(candidate.id)
@@ -462,74 +375,91 @@ struct OptimizerView: View {
                     .foregroundColor(isSelected ? .ivAccent : .ivTextTertiary)
             }
             .buttonStyle(.borderless)
-            .frame(width: 36, alignment: .center)
+            .frame(width: 32, alignment: .center)
 
-            // Filename + device info
-            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+            // Filename + device subtitle
+            VStack(alignment: .leading, spacing: 1) {
                 Text(candidate.detail.originalFileName ?? "Unknown")
-                    .font(IVFont.body)
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.ivTextPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                if let make = candidate.detail.make, let model = candidate.detail.model {
-                    Text("\(make) \(model)")
-                        .font(IVFont.monoSmall)
-                        .foregroundColor(.ivTextTertiary)
-                        .lineLimit(1)
-                }
+                Text(candidateSubtitle(candidate))
+                    .font(.system(size: 10))
+                    .foregroundColor(.ivTextTertiary)
+                    .lineLimit(1)
             }
             .frame(minWidth: 120, alignment: .leading)
 
             Spacer()
 
-            // Original size
+            // Original size — 11px mono, secondary color
             Text(candidate.originalSizeFormatted)
-                .font(IVFont.mono)
-                .foregroundColor(.ivTextPrimary)
-                .frame(width: 80, alignment: .trailing)
+                .font(cellMono)
+                .foregroundColor(.ivTextSecondary)
+                .frame(width: 72, alignment: .trailing)
 
             // Codec badge
             codecBadge(candidate.detail.codec)
-                .frame(width: 70, alignment: .center)
+                .frame(width: 64, alignment: .center)
 
-            // Resolution
+            // Resolution — 11px mono, secondary
             Text(candidate.resolution ?? "--")
-                .font(IVFont.monoSmall)
-                .foregroundColor(.ivTextTertiary)
-                .frame(width: 90, alignment: .trailing)
-
-            // Duration
-            Text(candidate.durationFormatted)
-                .font(IVFont.monoSmall)
-                .foregroundColor(.ivTextTertiary)
-                .frame(width: 70, alignment: .trailing)
-
-            // Estimated output
-            Text(candidate.estimatedOutputFormatted)
-                .font(IVFont.mono)
+                .font(cellMono)
                 .foregroundColor(.ivTextSecondary)
-                .frame(width: 80, alignment: .trailing)
+                .frame(width: 84, alignment: .trailing)
 
-            // Savings %
+            // Duration — 11px mono, secondary
+            Text(compactDuration(candidate.detail.duration))
+                .font(cellMono)
+                .foregroundColor(.ivTextSecondary)
+                .frame(width: 64, alignment: .trailing)
+
+            // Estimated output — 11px mono, secondary
+            Text("~\(candidate.estimatedOutputFormatted)")
+                .font(cellMono)
+                .foregroundColor(.ivTextSecondary)
+                .frame(width: 76, alignment: .trailing)
+
+            // Savings % — mono, green
             Text(String(format: "-%.0f%%", candidate.savingsPercent))
-                .font(IVFont.captionMedium)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundColor(.ivSuccess)
-                .frame(width: 60, alignment: .trailing)
+                .frame(width: 56, alignment: .trailing)
 
-            // Matched rule
-            Text(viewModel.ruleMatches[candidate.id]?.name ?? "\u{2014}")
-                .font(IVFont.caption)
-                .foregroundColor(viewModel.ruleMatches[candidate.id] != nil ? .ivAccent : .ivTextTertiary)
-                .frame(width: 90, alignment: .leading)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            // Matched rule — tag pill style
+            ruleTag(viewModel.ruleMatches[candidate.id]?.name)
+                .frame(width: 80, alignment: .leading)
         }
-        .padding(.horizontal, IVSpacing.lg)
+        .padding(.horizontal, IVSpacing.sm)
         .padding(.vertical, IVSpacing.sm)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(candidate.detail.originalFileName ?? "Unknown"), \(candidate.originalSizeFormatted), \(isSelected ? "selected" : "not selected")")
+    }
+
+    // MARK: - Rule Tag (pill with subtle background per mockup)
+
+    @ViewBuilder
+    private func ruleTag(_ name: String?) -> some View {
+        if let name = name {
+            Text(name)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.ivTextSecondary)
+                .padding(.horizontal, IVSpacing.xs)
+                .padding(.vertical, IVSpacing.xxxs)
+                .background {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.white.opacity(0.06))
+                }
+                .lineLimit(1)
+                .truncationMode(.tail)
+        } else {
+            Text("\u{2014}")
+                .font(.system(size: 10))
+                .foregroundColor(.ivTextTertiary)
+        }
     }
 
     // MARK: - Context Menu
@@ -598,7 +528,7 @@ struct OptimizerView: View {
 
             Divider()
 
-            // Main status bar — plain text with middle-dot separators
+            // Main status bar
             HStack(spacing: IVSpacing.sm) {
                 statusItems
                 Spacer()
@@ -617,6 +547,7 @@ struct OptimizerView: View {
                 Text("\u{00B7}")
                     .font(IVFont.caption)
                     .foregroundColor(.ivTextTertiary)
+                    .opacity(0.6)
             }
             Text(item.text)
                 .font(IVFont.caption)
@@ -670,7 +601,6 @@ struct OptimizerView: View {
             ))
         }
 
-        // Only show filtered count when a filter is active
         if viewModel.filteredCandidates.count != viewModel.candidates.count {
             items.append(StatusItem(
                 text: "Showing \(viewModel.filteredCandidates.count) of \(viewModel.candidates.count)",
@@ -721,8 +651,8 @@ struct OptimizerView: View {
         let isHEVC = label.contains("HEVC") || label.contains("H265") || label.contains("H.265")
         let badgeColor: Color = isHEVC ? .purple : .orange
 
-        return Text(isHEVC ? "HEVC" : label)
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        return Text(isHEVC ? "HEVC" : (label.contains("H264") || label.contains("AVC") ? "H.264" : label))
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundColor(badgeColor)
             .padding(.horizontal, IVSpacing.xs)
             .padding(.vertical, IVSpacing.xxxs)
@@ -730,6 +660,32 @@ struct OptimizerView: View {
                 RoundedRectangle(cornerRadius: 3)
                     .fill(badgeColor.opacity(0.12))
             }
+    }
+
+    // MARK: - Table Row Helpers
+
+    private func candidateSubtitle(_ candidate: TranscodeCandidate) -> String {
+        if let make = candidate.detail.make, let model = candidate.detail.model {
+            return "\(make) \(model)"
+        }
+        if let make = candidate.detail.make {
+            return make
+        }
+        let codec = candidate.detail.codec?.uppercased() ?? "Video"
+        let res = candidate.resolution ?? ""
+        return res.isEmpty ? codec : "\(codec) \(res)"
+    }
+
+    private func compactDuration(_ seconds: Double?) -> String {
+        guard let d = seconds, d > 0 else { return "0:00" }
+        let totalSeconds = Int(d)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%d:%02d", minutes, secs)
     }
 
     // MARK: - CRF Quality Helpers
@@ -767,203 +723,353 @@ struct CandidateInspectorPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: IVSpacing.xl) {
+            VStack(alignment: .leading, spacing: 0) {
                 inspectorHeader
-                Divider()
+                    .padding(IVSpacing.lg)
+
+                dividerLine
+
                 videoMetadataSection
-                if let rule = matchedRule {
-                    matchedRuleSection(rule)
-                }
+                    .padding(IVSpacing.lg)
+
+                dividerLine
+
                 transcodeSettingsSection
-                estimatedResultSection
-                Divider()
+                    .padding(IVSpacing.lg)
+
                 actionsSection
+                    .padding(.horizontal, IVSpacing.lg)
+                    .padding(.bottom, IVSpacing.lg)
             }
-            .padding(IVSpacing.lg)
         }
         .background(Color.ivBackground)
+    }
+
+    private var dividerLine: some View {
+        Rectangle()
+            .fill(Color.ivBorder.opacity(0.3))
+            .frame(height: 0.5)
     }
 
     // MARK: - Header
 
     private var inspectorHeader: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.sm) {
-            HStack(spacing: IVSpacing.sm) {
-                Image(systemName: "film")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundColor(.ivTextSecondary)
-
-                VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
-                    Text(candidate.detail.originalFileName ?? "Unknown Video")
-                        .font(IVFont.headline)
-                        .foregroundColor(.ivTextPrimary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-
-                    Text("Video")
-                        .font(IVFont.caption)
+        HStack(spacing: IVSpacing.md) {
+            RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                .fill(Color.ivSurface)
+                .frame(width: 40, height: 40)
+                .overlay {
+                    Image(systemName: "film")
+                        .font(.system(size: 20, weight: .light))
                         .foregroundColor(.ivTextSecondary)
                 }
-            }
 
-            IVStatusBadge("Candidate", status: .info)
+            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                Text(candidate.detail.originalFileName ?? "Unknown Video")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.ivTextPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(candidate.id)
+                    .font(IVFont.monoSmall)
+                    .foregroundColor(.ivTextTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }
     }
 
     // MARK: - Video Metadata
 
     private var videoMetadataSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
-            Text("ORIGINAL VIDEO")
-                .font(IVFont.captionMedium)
-                .foregroundColor(.ivTextTertiary)
-                .tracking(0.5)
+        VStack(alignment: .leading, spacing: IVSpacing.sm) {
+            inspectorSectionTitle("ORIGINAL VIDEO")
 
-            metadataRow(label: "File Size", value: candidate.originalSizeFormatted)
-            metadataRow(label: "Codec", value: candidate.detail.codec?.uppercased() ?? "Unknown")
-            metadataRow(label: "Resolution", value: candidate.resolution ?? "Unknown")
-            metadataRow(label: "Duration", value: candidate.durationFormatted)
+            Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.xxs) {
+                inspectorGridRow("File Size", candidate.originalSizeFormatted, mono: true)
+                inspectorGridRow("Codec", formatCodecDisplay(candidate.detail.codec))
+                inspectorGridRow("Resolution", candidate.resolution ?? "Unknown", mono: true)
 
-            if let bitrate = candidate.detail.bitrate {
-                metadataRow(label: "Bitrate", value: "\(bitrate / 1000) kbps")
-            }
+                if let fps = candidate.detail.fps, fps > 0 {
+                    inspectorGridRow("Frame Rate", "\(Int(fps)) fps", mono: true)
+                }
 
-            let hasGPS = candidate.detail.latitude != nil && candidate.detail.longitude != nil
-            metadataRow(label: "GPS", value: hasGPS ? "Yes" : "No")
+                if let bitrate = candidate.detail.bitrate {
+                    inspectorGridRow("Bitrate", String(format: "%.1f Mbps", Double(bitrate) / 1_000_000), mono: true)
+                }
 
-            if let make = candidate.detail.make {
-                metadataRow(label: "Camera", value: make + (candidate.detail.model.map { " \($0)" } ?? ""))
-            }
+                inspectorGridRow("Duration", formatCompactDuration(candidate.detail.duration), mono: true)
 
-            if let dateStr = candidate.detail.dateTimeOriginal {
-                metadataRow(label: "Date", value: dateStr)
-            }
+                if let dateStr = candidate.detail.dateTimeOriginal {
+                    inspectorGridRow("Date", formatInspectorDate(dateStr))
+                }
 
-            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
-                Text("Immich ID")
-                    .font(IVFont.captionMedium)
-                    .foregroundColor(.ivTextSecondary)
-                Text(candidate.id)
-                    .font(IVFont.monoSmall)
-                    .foregroundColor(.ivTextTertiary)
-                    .lineLimit(2)
-                    .textSelection(.enabled)
+                if let make = candidate.detail.make {
+                    inspectorGridRow("Camera", make + (candidate.detail.model.map { " \($0)" } ?? ""))
+                }
+
+                let hasGPS = candidate.detail.latitude != nil && candidate.detail.longitude != nil
+                if hasGPS, let lat = candidate.detail.latitude, let lon = candidate.detail.longitude {
+                    inspectorGridRow("GPS", String(format: "%.4f, %.4f", lat, lon), mono: true)
+                } else {
+                    inspectorGridRow("GPS", hasGPS ? "Yes" : "No")
+                }
             }
         }
     }
 
-    // MARK: - Matched Rule
-
-    private func matchedRuleSection(_ rule: TranscodeRule) -> some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
-            Text("MATCHED RULE")
-                .font(IVFont.captionMedium)
-                .foregroundColor(.ivTextTertiary)
-                .tracking(0.5)
-
-            metadataRow(label: "Rule", value: rule.name)
-            metadataRow(label: "Preset", value: rule.presetName)
-            metadataRow(label: "Priority", value: "\(rule.priority)")
-
-            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
-                Text("Conditions")
-                    .font(IVFont.captionMedium)
-                    .foregroundColor(.ivTextSecondary)
-                Text(rule.conditionsSummary)
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivTextTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(IVSpacing.lg)
-        .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.md)
-                .fill(Color.orange.opacity(0.04))
-        }
-    }
-
-    // MARK: - Transcode Settings
+    // MARK: - Transcode Settings + Estimated
 
     private var transcodeSettingsSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
-            Text("TRANSCODE SETTINGS")
-                .font(IVFont.captionMedium)
-                .foregroundColor(.ivTextTertiary)
-                .tracking(0.5)
+        VStack(alignment: .leading, spacing: IVSpacing.sm) {
+            inspectorSectionTitle("TRANSCODE SETTINGS")
 
-            metadataRow(label: "Preset", value: preset.name)
-            metadataRow(label: "Video Codec", value: preset.videoCodec.label)
-            metadataRow(label: "CRF", value: "\(preset.crf)")
-            if let resolution = preset.resolution, resolution != .keepSame {
-                metadataRow(label: "Resolution", value: resolution.label)
+            Grid(alignment: .leading, horizontalSpacing: IVSpacing.sm, verticalSpacing: IVSpacing.xxs) {
+                inspectorGridRow("Preset", preset.name)
+                inspectorGridRow("Codec", "\(preset.videoCodec.label)")
+                inspectorGridRow("CRF", "\(preset.crf)", mono: true)
+                inspectorGridRow("Speed", preset.encodeSpeed.label)
+                inspectorGridRow("Provider", provider.label)
             }
-            metadataRow(label: "Audio", value: "\(preset.audioCodec.label) \(preset.audioBitrate)")
-            metadataRow(label: "Container", value: preset.container.uppercased())
-            metadataRow(label: "Provider", value: provider.label)
+
+            estimatedBox
         }
     }
 
-    // MARK: - Estimated Result
-
-    private var estimatedResultSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
-            Text("ESTIMATED RESULT")
-                .font(IVFont.captionMedium)
-                .foregroundColor(.ivTextTertiary)
-                .tracking(0.5)
-
-            metadataRow(label: "Output Size", value: candidate.estimatedOutputFormatted)
-            metadataRow(label: "Savings", value: String(format: "%.0f%%", candidate.savingsPercent))
-            metadataRow(label: "Space Freed", value: candidate.estimatedSavingsFormatted)
-
-            if let cost = estimatedCost, cost > 0 {
-                metadataRow(label: "Est. Cost", value: CostLedger.formatCost(cost))
+    private var estimatedBox: some View {
+        VStack(spacing: IVSpacing.xxs) {
+            HStack {
+                Text("Estimated output")
+                    .font(.system(size: 12))
+                    .foregroundColor(.ivTextSecondary)
+                Spacer()
+                Text("~\(candidate.estimatedOutputFormatted)")
+                    .font(IVFont.mono)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.ivSuccess)
+            }
+            HStack {
+                Text("Space saved")
+                    .font(.system(size: 12))
+                    .foregroundColor(.ivTextSecondary)
+                Spacer()
+                Text("~\(candidate.estimatedSavingsFormatted) (\(String(format: "%.0f%%", candidate.savingsPercent)))")
+                    .font(IVFont.mono)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.ivSuccess)
             }
 
-            Text("Estimates are approximate and based on typical compression ratios for the selected preset.")
-                .font(IVFont.caption)
-                .foregroundColor(.ivTextTertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let cost = estimatedCost, cost > 0 {
+                HStack {
+                    Text("Estimated cost")
+                        .font(.system(size: 12))
+                        .foregroundColor(.ivTextSecondary)
+                    Spacer()
+                    Text(CostLedger.formatCost(cost))
+                        .font(IVFont.mono)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.ivWarning)
+                }
+            }
         }
         .padding(IVSpacing.lg)
         .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.md)
-                .fill(Color.ivSuccess.opacity(0.04))
+            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                .fill(Color.ivSuccess.opacity(0.06))
         }
+        .padding(.top, IVSpacing.sm)
     }
 
     // MARK: - Actions
 
     private var actionsSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.sm) {
-            Text("ACTIONS")
-                .font(IVFont.captionMedium)
-                .foregroundColor(.ivTextTertiary)
-                .tracking(0.5)
-
-            Button {
-                onTranscodeNow()
-            } label: {
-                Label("Queue Transcode Now", systemImage: "wand.and.stars")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
+        Button {
+            onTranscodeNow()
+        } label: {
+            Text("Queue Transcode Now")
+                .font(IVFont.bodyMedium)
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
     }
 
     // MARK: - Helpers
 
-    private func metadataRow(label: String, value: String) -> some View {
-        HStack {
+    private func inspectorSectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(.ivTextTertiary)
+            .tracking(0.5)
+    }
+
+    private func inspectorGridRow(_ label: String, _ value: String, mono: Bool = false) -> some View {
+        GridRow {
             Text(label)
-                .font(IVFont.captionMedium)
-                .foregroundColor(.ivTextSecondary)
+                .font(IVFont.caption)
+                .foregroundColor(.ivTextTertiary)
                 .frame(width: 80, alignment: .leading)
             Text(value)
-                .font(IVFont.body)
+                .font(mono ? IVFont.monoSmall : IVFont.caption)
                 .foregroundColor(.ivTextPrimary)
-            Spacer()
         }
+    }
+
+    private func formatCompactDuration(_ seconds: Double?) -> String {
+        guard let d = seconds, d > 0 else { return "0:00" }
+        let totalSeconds = Int(d)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%d:%02d", minutes, secs)
+    }
+
+    private func formatInspectorDate(_ isoDate: String) -> String {
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = isoFormatter.date(from: isoDate) {
+            let df = DateFormatter()
+            df.dateFormat = "MMM d, yyyy h:mm a"
+            return df.string(from: date)
+        }
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        if let date = isoFormatter.date(from: isoDate) {
+            let df = DateFormatter()
+            df.dateFormat = "MMM d, yyyy h:mm a"
+            return df.string(from: date)
+        }
+        return isoDate
+    }
+
+    private func formatCodecDisplay(_ codec: String?) -> String {
+        guard let codec = codec else { return "Unknown" }
+        let upper = codec.uppercased()
+        if upper.contains("HEVC") || upper.contains("H265") || upper.contains("H.265") {
+            return "HEVC"
+        }
+        if upper.contains("H264") || upper.contains("H.264") || upper.contains("AVC") {
+            return "H.264"
+        }
+        return codec
+    }
+}
+
+// MARK: - Inline Stepper (custom −/+ buttons matching mockup)
+
+struct InlineStepper: View {
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    let step: Int
+    let suffix: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                if value - step >= range.lowerBound { value -= step }
+            } label: {
+                Text("\u{2212}")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 24, height: 26)
+            }
+            .buttonStyle(.borderless)
+            .foregroundColor(.ivTextSecondary)
+
+            Text("\(value) \(suffix)")
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundColor(.ivTextPrimary)
+                .frame(minWidth: 64)
+                .frame(height: 26)
+
+            Button {
+                if value + step <= range.upperBound { value += step }
+            } label: {
+                Text("+")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 24, height: 26)
+            }
+            .buttonStyle(.borderless)
+            .foregroundColor(.ivTextSecondary)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                .stroke(Color.ivBorder, lineWidth: 0.5)
+        }
+    }
+}
+
+// MARK: - Filter Date Field
+
+struct FilterDateField: View {
+    @Binding var date: Date?
+    let placeholder: String
+    @State private var showPopover = false
+
+    var body: some View {
+        HStack {
+            Group {
+                if let d = date {
+                    Text(formatDate(d))
+                        .font(.system(size: 12))
+                        .foregroundColor(.ivTextPrimary)
+                } else {
+                    Text(placeholder)
+                        .font(.system(size: 12))
+                        .foregroundColor(.ivTextTertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if date == nil { date = Date() }
+                showPopover = true
+            }
+
+            if date != nil {
+                Button {
+                    date = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.ivTextTertiary)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(.horizontal, IVSpacing.sm)
+        .padding(.vertical, IVSpacing.xxs)
+        .frame(height: 26)
+        .background {
+            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                .fill(Color.white.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                )
+        }
+        .popover(isPresented: $showPopover) {
+            DatePicker(
+                "",
+                selection: Binding(
+                    get: { date ?? Date() },
+                    set: { date = $0 }
+                ),
+                displayedComponents: [.date]
+            )
+            .datePickerStyle(.graphical)
+            .labelsHidden()
+            .padding()
+        }
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, yyyy"
+        return formatter.string(from: date)
     }
 }

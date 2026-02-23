@@ -63,7 +63,7 @@ struct OptimizerContainerView: View {
                     .labelsHidden()
                 }
 
-                // Primary: single workflow action (trailing)
+                // Primary: Queue Selected on the right (trailing)
                 ToolbarItemGroup(placement: .primaryAction) {
                     if selectedTab == .autoOptimizer {
                         if optimizerVM.isProcessing {
@@ -77,34 +77,33 @@ struct OptimizerContainerView: View {
                             Button {
                                 optimizerVM.startTranscoding()
                             } label: {
-                                Label(
-                                    "Queue Selected (\(optimizerVM.selectedCandidateCount))",
-                                    systemImage: "wand.and.stars"
-                                )
+                                Text("Queue Selected (\(optimizerVM.selectedCandidateCount))")
+                                    .fontWeight(.medium)
                             }
+                            .buttonStyle(.borderedProminent)
                             .keyboardShortcut(KeyEquivalent.return, modifiers: [.command])
                         }
+
+                        Button {
+                            Task { await optimizerVM.scanForCandidates() }
+                        } label: {
+                            HStack(spacing: IVSpacing.xxs) {
+                                Image(systemName: "arrow.clockwise")
+                                Text(optimizerVM.isDiscovering ? "Scanning..." : "Scan Immich")
+                            }
+                            .font(IVFont.bodyMedium)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(optimizerVM.isDiscovering || optimizerVM.isProcessing)
+                        .keyboardShortcut("r", modifiers: .command)
+                        .help("Scan Immich for candidates")
                     }
                 }
 
-                // Secondary: utility actions with text labels
+                // Secondary: Rules + Inspector + Scan on the left
                 ToolbarItem(placement: .secondaryAction) {
                     if selectedTab == .autoOptimizer {
                         HStack(spacing: IVSpacing.xs) {
-                            Button {
-                                Task { await optimizerVM.scanForCandidates() }
-                            } label: {
-                                HStack(spacing: IVSpacing.xxs) {
-                                    Image(systemName: "arrow.clockwise")
-                                    Text(optimizerVM.isDiscovering ? "Scanning..." : "Scan Immich")
-                                }
-                                .font(IVFont.bodyMedium)
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(optimizerVM.isDiscovering || optimizerVM.isProcessing)
-                            .keyboardShortcut("r", modifiers: .command)
-                            .help("Scan Immich for candidates")
-
                             Button {
                                 optimizerVM.showRulesEditor = true
                             } label: {

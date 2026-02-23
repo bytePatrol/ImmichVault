@@ -196,20 +196,27 @@ public struct IVEmptyState: View {
     }
 
     public var body: some View {
-        VStack(spacing: IVSpacing.lg) {
-            Image(systemName: icon)
-                .font(.system(size: 40, weight: .light))
-                .foregroundColor(.ivTextTertiary)
+        VStack(spacing: IVSpacing.xl) {
+            // Icon in a 64x64 rounded background box (matches mockup)
+            RoundedRectangle(cornerRadius: IVCornerRadius.lg)
+                .fill(Color.ivSurface)
+                .frame(width: 64, height: 64)
+                .overlay {
+                    Image(systemName: icon)
+                        .font(.system(size: 28, weight: .light))
+                        .foregroundColor(.ivTextTertiary)
+                }
 
-            VStack(spacing: IVSpacing.xs) {
+            VStack(spacing: IVSpacing.sm) {
                 Text(title)
-                    .font(IVFont.headline)
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(.ivTextPrimary)
                 Text(message)
                     .font(IVFont.body)
                     .foregroundColor(.ivTextSecondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 300)
+                    .lineSpacing(3)
+                    .frame(maxWidth: 360)
             }
 
             if let actionTitle, let action {

@@ -31,6 +31,11 @@ public final class OptimizerViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var filterText: String = ""
     @Published var sortOrder: CandidateSortOrder = .sizeDesc
+    @Published var viewMode: ViewMode = .list
+
+    // Cached credentials (set during scanForCandidates)
+    @Published private(set) var cachedServerURL: String = ""
+    @Published private(set) var cachedAPIKey: String = ""
 
     // MARK: - Rules
 
@@ -198,6 +203,8 @@ public final class OptimizerViewModel: ObservableObject {
         do {
             let apiKey = try KeychainManager.shared.read(.immichAPIKey)
             let serverURL = settings.immichServerURL
+            cachedServerURL = serverURL
+            cachedAPIKey = apiKey
             let thresholdBytes = Int64(sizeThresholdMB) * 1_048_576
 
             var allCandidates: [TranscodeCandidate] = []
@@ -506,6 +513,10 @@ struct ProcessingProgress: Sendable {
 }
 
 extension OptimizerViewModel {
+    enum ViewMode: String, CaseIterable {
+        case list, grid
+    }
+
     enum CandidateSortOrder: String, CaseIterable, Identifiable {
         case sizeDesc = "Largest First"
         case sizeAsc = "Smallest First"

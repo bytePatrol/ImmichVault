@@ -59,7 +59,7 @@ struct JobsView: View {
                     Text("Jobs")
                         .font(IVFont.displayMedium)
                         .foregroundColor(.ivTextPrimary)
-                    Text("Transcode job history and status")
+                    Text("Active and completed transcode/upload jobs")
                         .font(IVFont.caption)
                         .foregroundColor(.ivTextTertiary)
                 }
@@ -196,15 +196,15 @@ struct JobsView: View {
                     .font(IVFont.captionMedium)
                 Text("\(count)")
                     .font(IVFont.monoSmall)
-                    .foregroundColor(isActive ? .white.opacity(0.8) : .ivTextTertiary)
+                    .foregroundColor(isActive ? .ivAccent.opacity(0.7) : .ivTextTertiary)
             }
             .padding(.horizontal, IVSpacing.sm)
             .padding(.vertical, IVSpacing.xxs)
             .background {
                 Capsule()
-                    .fill(isActive ? Color.ivAccent : Color.ivSurface)
+                    .fill(isActive ? Color.ivAccent.opacity(0.12) : Color.ivSurface)
             }
-            .foregroundColor(isActive ? .white : .ivTextSecondary)
+            .foregroundColor(isActive ? .ivAccent : .ivTextSecondary)
         }
         .buttonStyle(.plain)
     }
@@ -468,39 +468,102 @@ struct JobsView: View {
     // MARK: - Status Bar
 
     private var jobsStatusBar: some View {
-        HStack(spacing: IVSpacing.lg) {
-            HStack(spacing: IVSpacing.xs) {
-                Circle()
-                    .fill(Color.purple)
-                    .frame(width: 6, height: 6)
-                Text("\(viewModel.filteredJobs.count) jobs")
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivTextSecondary)
+        VStack(spacing: 0) {
+            // Stats cards row (Figma: 3-column grid at bottom)
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: IVSpacing.md),
+                GridItem(.flexible(), spacing: IVSpacing.md),
+                GridItem(.flexible(), spacing: IVSpacing.md),
+            ], spacing: IVSpacing.md) {
+                jobStatCard(
+                    title: "Active Jobs",
+                    value: "\(viewModel.activeJobCount)",
+                    icon: "clock",
+                    color: .ivInfo
+                )
+                jobStatCard(
+                    title: "Completed Today",
+                    value: "\(viewModel.completedTodayCount)",
+                    icon: "checkmark.circle",
+                    color: .ivSuccess
+                )
+                jobStatCard(
+                    title: "Failed Today",
+                    value: "\(viewModel.failedTodayCount)",
+                    icon: "xmark.circle",
+                    color: .ivError
+                )
             }
+            .padding(.horizontal, IVSpacing.lg)
+            .padding(.vertical, IVSpacing.md)
 
-            if viewModel.totalSpaceSaved > 0 {
+            // Main status summary
+            HStack(spacing: IVSpacing.lg) {
                 HStack(spacing: IVSpacing.xs) {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 9))
-                        .foregroundColor(.ivSuccess)
-                    Text("Total saved: \(formatBytes(viewModel.totalSpaceSaved))")
-                        .font(IVFont.captionMedium)
-                        .foregroundColor(.ivSuccess)
+                    Circle()
+                        .fill(Color.purple)
+                        .frame(width: 6, height: 6)
+                    Text("\(viewModel.filteredJobs.count) jobs")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
                 }
+
+                if viewModel.totalSpaceSaved > 0 {
+                    HStack(spacing: IVSpacing.xs) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 9))
+                            .foregroundColor(.ivSuccess)
+                        Text("Total saved: \(formatBytes(viewModel.totalSpaceSaved))")
+                            .font(IVFont.captionMedium)
+                            .foregroundColor(.ivSuccess)
+                    }
+                }
+
+                Spacer()
+
+                Text("Showing \(viewModel.filteredJobs.count) of \(viewModel.jobs.count)")
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextTertiary)
             }
-
-            Spacer()
-
-            Text("Showing \(viewModel.filteredJobs.count) of \(viewModel.jobs.count)")
-                .font(IVFont.caption)
-                .foregroundColor(.ivTextTertiary)
+            .padding(.horizontal, IVSpacing.lg)
+            .padding(.vertical, IVSpacing.sm)
         }
-        .padding(.horizontal, IVSpacing.lg)
-        .padding(.vertical, IVSpacing.sm)
         .background {
             Rectangle()
                 .fill(Color.ivSurface)
                 .shadow(color: .black.opacity(0.04), radius: 1, y: -1)
+        }
+    }
+
+    private func jobStatCard(title: String, value: String, icon: String, color: Color) -> some View {
+        HStack(spacing: IVSpacing.md) {
+            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                .fill(color.opacity(0.1))
+                .frame(width: 32, height: 32)
+                .overlay {
+                    Image(systemName: icon)
+                        .font(.system(size: 14))
+                        .foregroundColor(color)
+                }
+
+            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                Text(title)
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+                Text(value)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundColor(.ivTextPrimary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(IVSpacing.md)
+        .background {
+            RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                .fill(Color.ivSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                )
         }
     }
 

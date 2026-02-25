@@ -26,5 +26,10 @@
 	<string>ImmichVault needs access to your Photos library to scan and upload photos and videos to your Immich server. Only assets matching your configured filters will be processed.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>ImmichVault may need to save optimized versions back to your Photos library.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

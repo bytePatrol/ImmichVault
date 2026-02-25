@@ -26,10 +26,8 @@ Package.resolved
 # Misc
 *.log
 
-# Development artifacts
-.claude/
-CLAUDE.md
-claude.md
-CLAUDE_MEMORY.md
-CLAUDE_PHASE_DETAILS.md
+# Development notes & design artifacts
+*.notes.md
 mockup*.html
+mockups/
+.interface-design/

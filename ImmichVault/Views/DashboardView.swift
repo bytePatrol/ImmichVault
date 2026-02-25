@@ -2,6 +2,7 @@ import SwiftUI
 
 // MARK: - Dashboard View
 // Health overview with live DB stats and recent activity.
+// Figma: Stats grid (4 cards), optimizer status, recent activity feed.
 
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
@@ -10,17 +11,21 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: IVSpacing.xxl) {
+            VStack(alignment: .leading, spacing: IVSpacing.xl) {
                 // Header
-                IVSectionHeader("Dashboard", subtitle: "Overview of your ImmichVault activity")
+                VStack(alignment: .leading, spacing: IVSpacing.xxs) {
+                    Text("Dashboard")
+                        .font(IVFont.displayMedium)
+                        .foregroundColor(.ivTextPrimary)
+                    Text("Library health and performance metrics")
+                        .font(IVFont.body)
+                        .foregroundColor(.ivTextSecondary)
+                }
 
-                // Connection Status Card
-                connectionCard
-
-                // Stats Grid
+                // Stats Grid (4 columns, responsive)
                 statsGrid
 
-                // Cloud Cost Summary
+                // Cloud Cost Summary (conditional)
                 if viewModel.totalCostAllTime > 0 {
                     costSummaryRow
                 }
@@ -48,66 +53,7 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - Connection Card
-
-    private var connectionCard: some View {
-        HStack(spacing: IVSpacing.lg) {
-            VStack(alignment: .leading, spacing: IVSpacing.sm) {
-                HStack(spacing: IVSpacing.sm) {
-                    Circle()
-                        .fill(appState.isConnectedToImmich ? Color.ivSuccess : Color.ivError)
-                        .frame(width: 10, height: 10)
-                    Text(appState.isConnectedToImmich ? "Connected to Immich" : "Disconnected")
-                        .font(IVFont.headline)
-                        .foregroundColor(.ivTextPrimary)
-                }
-
-                if appState.isConnectedToImmich {
-                    VStack(alignment: .leading, spacing: IVSpacing.xxs) {
-                        if let user = appState.connectedUserName {
-                            Text("Authenticated as \(user)")
-                                .font(IVFont.body)
-                                .foregroundColor(.ivTextSecondary)
-                        }
-                        HStack(spacing: IVSpacing.lg) {
-                            if let version = appState.connectedServerVersion {
-                                Label("v\(version)", systemImage: "server.rack")
-                                    .font(IVFont.caption)
-                                    .foregroundColor(.ivTextTertiary)
-                            }
-                            Label(settings.immichServerURL, systemImage: "link")
-                                .font(IVFont.caption)
-                                .foregroundColor(.ivTextTertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                } else {
-                    Text("Configure your Immich connection in Settings.")
-                        .font(IVFont.body)
-                        .foregroundColor(.ivTextSecondary)
-                }
-            }
-
-            Spacer()
-
-            if !appState.isConnectedToImmich {
-                Button("Open Settings") {
-                    appState.selectedNavItem = .settings
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(IVSpacing.lg)
-        .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.lg)
-                .fill(Color.ivSurface)
-                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(appState.isConnectedToImmich ? "Connected to Immich" : "Disconnected from Immich")
-    }
-
-    // MARK: - Stats Grid
+    // MARK: - Stats Grid (Figma: 4-column responsive grid)
 
     private var statsGrid: some View {
         LazyVGrid(columns: [
@@ -116,17 +62,85 @@ struct DashboardView: View {
             GridItem(.flexible(), spacing: IVSpacing.lg),
             GridItem(.flexible(), spacing: IVSpacing.lg),
         ], spacing: IVSpacing.lg) {
-            statCard(title: "Queued", value: "\(viewModel.queuedCount)", icon: "tray", color: .ivInfo)
-            statCard(title: "Uploaded", value: formatNumber(viewModel.uploadedCount), icon: "arrow.up.circle", color: .ivSuccess)
             statCard(
-                title: viewModel.totalSpaceSaved > 0 ? "Optimized (\(viewModel.spaceSavedFormatted) saved)" : "Optimized",
+                title: "Total Assets",
+                value: formatNumber(viewModel.queuedCount + viewModel.uploadedCount),
+                subtitle: viewModel.isLoaded ? "\(formatNumber(viewModel.queuedCount)) queued" : nil,
+                icon: "externaldrive",
+                color: .ivInfo
+            )
+            statCard(
+                title: "Uploaded",
+                value: formatNumber(viewModel.uploadedCount),
+                subtitle: uploadedPercent,
+                icon: "arrow.up.circle",
+                color: .ivSuccess
+            )
+            statCard(
+                title: "Transcoded",
                 value: formatNumber(viewModel.optimizedCount),
-                icon: "wand.and.stars",
+                subtitle: viewModel.totalSpaceSaved > 0 ? "\(viewModel.spaceSavedFormatted) saved" : nil,
+                icon: "bolt",
                 color: .purple
             )
-            statCard(title: "Failed", value: "\(viewModel.failedCount)", icon: "exclamationmark.triangle", color: .ivError)
+            statCard(
+                title: "Failed",
+                value: "\(viewModel.failedCount)",
+                subtitle: viewModel.failedCount > 0 ? "Needs attention" : nil,
+                icon: "exclamationmark.triangle",
+                color: .ivError
+            )
         }
     }
+
+    private var uploadedPercent: String? {
+        let total = viewModel.queuedCount + viewModel.uploadedCount
+        guard total > 0 else { return nil }
+        let pct = Double(viewModel.uploadedCount) / Double(total) * 100
+        return String(format: "%.1f%% complete", pct)
+    }
+
+    private func statCard(title: String, value: String, subtitle: String?, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: IVSpacing.sm) {
+            HStack {
+                VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                    Text(title)
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+                    Text(value)
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .foregroundColor(.ivTextPrimary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivTextTertiary)
+                    }
+                }
+                Spacer()
+                RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                    .fill(color.opacity(0.1))
+                    .frame(width: 32, height: 32)
+                    .overlay {
+                        Image(systemName: icon)
+                            .font(.system(size: 14))
+                            .foregroundColor(color)
+                    }
+            }
+        }
+        .padding(IVSpacing.lg)
+        .background {
+            RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                .fill(Color.ivSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title): \(value)")
+    }
+
+    // MARK: - Cost Summary
 
     private var costSummaryRow: some View {
         HStack(spacing: IVSpacing.sm) {
@@ -145,36 +159,11 @@ struct DashboardView: View {
         .background {
             RoundedRectangle(cornerRadius: IVCornerRadius.md)
                 .fill(Color.ivSurface)
-                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                )
         }
-    }
-
-    private func statCard(title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundColor(color)
-                Spacer()
-            }
-
-            VStack(alignment: .leading, spacing: IVSpacing.xxs) {
-                Text(value)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundColor(.ivTextPrimary)
-                Text(title)
-                    .font(IVFont.captionMedium)
-                    .foregroundColor(.ivTextSecondary)
-            }
-        }
-        .padding(IVSpacing.lg)
-        .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.lg)
-                .fill(Color.ivSurface)
-                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title): \(value)")
     }
 
     // MARK: - Optimizer Status
@@ -183,11 +172,11 @@ struct DashboardView: View {
         HStack(spacing: IVSpacing.lg) {
             VStack(alignment: .leading, spacing: IVSpacing.sm) {
                 HStack(spacing: IVSpacing.sm) {
-                    Image(systemName: "gearshape.2")
+                    Image(systemName: "bolt")
                         .font(.system(size: 14))
                         .foregroundColor(.purple)
                     Text("Optimizer")
-                        .font(IVFont.headline)
+                        .font(IVFont.bodyMedium)
                         .foregroundColor(.ivTextPrimary)
 
                     IVStatusBadge(
@@ -217,29 +206,37 @@ struct DashboardView: View {
         }
         .padding(IVSpacing.lg)
         .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.lg)
+            RoundedRectangle(cornerRadius: IVCornerRadius.md)
                 .fill(Color.ivSurface)
-                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                )
         }
     }
 
-    // MARK: - Recent Activity
+    // MARK: - Recent Activity (Figma: table with time, event, detail, status dot)
 
     private var recentActivityCard: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
             HStack {
-                IVSectionHeader("Recent Activity")
+                Text("Recent Activity")
+                    .font(IVFont.bodyMedium)
+                    .foregroundColor(.ivTextPrimary)
                 Spacer()
-                if let lastRun = viewModel.lastSuccessfulRun {
-                    Text("Last run: \(lastRun, style: .relative) ago")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
-                }
-                Button("View All") {
+                Button {
                     appState.selectedNavItem = .logs
+                } label: {
+                    Text("View All")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
                 }
-                .font(IVFont.caption)
+                .buttonStyle(.borderless)
             }
+            .padding(IVSpacing.lg)
+
+            Divider()
 
             if viewModel.recentActivity.isEmpty {
                 IVEmptyState(
@@ -254,53 +251,50 @@ struct DashboardView: View {
                         recentActivityRow(entry)
                         if entry.id != viewModel.recentActivity.last?.id {
                             Divider()
-                                .padding(.leading, IVSpacing.lg)
                         }
                     }
                 }
-                .background {
-                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
-                        .fill(Color.ivBackground.opacity(0.5))
-                }
             }
         }
-        .padding(IVSpacing.lg)
         .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.lg)
+            RoundedRectangle(cornerRadius: IVCornerRadius.md)
                 .fill(Color.ivSurface)
-                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                )
         }
     }
 
     private func recentActivityRow(_ entry: ActivityLogRecord) -> some View {
         HStack(spacing: IVSpacing.md) {
-            Circle()
-                .fill(activityColor(entry.level))
-                .frame(width: 6, height: 6)
+            // Relative time
+            Text(entry.timestamp, style: .relative)
+                .font(IVFont.caption)
+                .foregroundColor(.ivTextTertiary)
+                .frame(width: 60, alignment: .leading)
 
+            // Event and detail
             VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
                 Text(entry.message)
-                    .font(IVFont.body)
+                    .font(IVFont.caption)
                     .foregroundColor(.ivTextPrimary)
                     .lineLimit(1)
-                HStack(spacing: IVSpacing.sm) {
-                    Text(LogCategory(rawValue: entry.category)?.label ?? entry.category)
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
-                    Text("·")
-                        .foregroundColor(.ivTextTertiary)
-                    Text(entry.timestamp, style: .relative)
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
-                }
+                Text(LogCategory(rawValue: entry.category)?.label ?? entry.category)
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
             }
 
             Spacer()
+
+            // Status dot
+            Circle()
+                .fill(activityColor(entry.level))
+                .frame(width: 6, height: 6)
         }
         .padding(.horizontal, IVSpacing.lg)
         .padding(.vertical, IVSpacing.sm)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.level) \(entry.message)")
+        .contentShape(Rectangle())
     }
 
     private func activityColor(_ level: String) -> Color {

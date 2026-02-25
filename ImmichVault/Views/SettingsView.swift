@@ -1,17 +1,14 @@
 import SwiftUI
 
 // MARK: - Settings View
-// Manages Immich connection, API keys, safety rails, and database operations.
+// Configures upload filters, bandwidth, scheduling, transcode presets, and database operations.
+// Figma: Settings page with card-based sections, max-width 4xl (~896px).
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var appState: AppState
 
-    @State private var showAPIKey = false
-    @State private var newAPIKey = ""
-    @State private var isTestingConnection = false
-    @State private var connectionTestResult: ConnectionTestResult?
-    @State private var showResetOnboardingAlert = false
+    @State private var showResetAlert = false
     @State private var dbExportError: String?
     @State private var dbImportError: String?
     @State private var dbSchemaVersion: Int?
@@ -20,268 +17,127 @@ struct SettingsView: View {
     @State private var providerKeyInputs: [TranscodeProviderType: String] = [:]
     @State private var providerKeySaveState: [TranscodeProviderType: Bool] = [:]
 
-    enum ConnectionTestResult {
-        case success(String)
-        case failure(String)
-    }
-
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: IVSpacing.xxl) {
+            VStack(alignment: .leading, spacing: IVSpacing.xl) {
                 // Header
-                IVSectionHeader("Settings", subtitle: "Configure ImmichVault connection, limits, and preferences")
-                    .padding(.bottom, IVSpacing.sm)
-
-                // Connection
-                connectionSection
+                VStack(alignment: .leading, spacing: IVSpacing.xxs) {
+                    Text("Settings")
+                        .font(IVFont.displayMedium)
+                        .foregroundColor(.ivTextPrimary)
+                    Text("Configure upload filters, bandwidth, scheduling, and transcode presets")
+                        .font(IVFont.body)
+                        .foregroundColor(.ivTextSecondary)
+                }
 
                 // Upload Filters
                 filterSection
 
-                // Safety Rails
-                safetyRailsSection
+                // Optimizer Mode
+                optimizerModeSection
 
                 // Maintenance Window
                 maintenanceSection
 
-                // Optimizer Mode
-                optimizerModeSection
-
                 // Provider API Keys
                 providerKeysSection
+
+                // Bandwidth Limits
+                bandwidthSection
 
                 // Database
                 databaseSection
 
-                // Danger Zone
+                // Actions: Save / Reset
                 dangerZoneSection
             }
             .padding(IVSpacing.xxl)
+            .frame(maxWidth: 896, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { loadSchemaVersion() }
     }
 
-    // MARK: - Connection Section
-
-    private var connectionSection: some View {
-        settingsCard(title: "Immich Connection", icon: "server.rack") {
-            VStack(alignment: .leading, spacing: IVSpacing.md) {
-                VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                    Text("Server URL")
-                        .font(IVFont.captionMedium)
-                        .foregroundColor(.ivTextSecondary)
-                    TextField("https://immich.example.com", text: $settings.immichServerURL)
-                        .textFieldStyle(.roundedBorder)
-                        .font(IVFont.body)
-                }
-
-                VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                    HStack {
-                        Text("API Key")
-                            .font(IVFont.captionMedium)
-                            .foregroundColor(.ivTextSecondary)
-                        Spacer()
-                        if let redacted = KeychainManager.shared.readRedacted(.immichAPIKey) {
-                            Text(redacted)
-                                .font(IVFont.mono)
-                                .foregroundColor(.ivTextTertiary)
-                        }
-                    }
-
-                    HStack(spacing: IVSpacing.sm) {
-                        SecureField("Enter new API key", text: $newAPIKey)
-                            .textFieldStyle(.roundedBorder)
-                            .font(IVFont.body)
-
-                        Button("Save") {
-                            saveAPIKey()
-                        }
-                        .disabled(newAPIKey.isEmpty)
-                    }
-                }
-
-                HStack(spacing: IVSpacing.md) {
-                    Button {
-                        Task { await testConnection() }
-                    } label: {
-                        HStack(spacing: IVSpacing.xs) {
-                            if isTestingConnection {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .frame(width: 12, height: 12)
-                            }
-                            Text(isTestingConnection ? "Testing..." : "Test Connection")
-                        }
-                    }
-                    .disabled(isTestingConnection)
-
-                    if let result = connectionTestResult {
-                        switch result {
-                        case .success(let msg):
-                            IVStatusBadge(msg, status: .success)
-                        case .failure(let msg):
-                            IVStatusBadge(msg, status: .error)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Filter Section
+    // MARK: - Upload Filters
 
     private var filterSection: some View {
         settingsCard(title: "Upload Filters", icon: "line.3.horizontal.decrease.circle") {
             VStack(alignment: .leading, spacing: IVSpacing.md) {
-                HStack {
-                    Toggle(isOn: Binding(
-                        get: { settings.uploadStartDate != nil },
-                        set: { enabled in
-                            if enabled {
-                                settings.uploadStartDate = Date()
-                            } else {
+                // Start date
+                VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                    Text("Never Upload Media Before This Date")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+
+                    HStack {
+                        if settings.uploadStartDate != nil {
+                            DatePicker(
+                                "",
+                                selection: Binding(
+                                    get: { settings.uploadStartDate ?? Date() },
+                                    set: { settings.uploadStartDate = $0 }
+                                ),
+                                displayedComponents: [.date]
+                            )
+                            .labelsHidden()
+
+                            Button("Clear") {
                                 settings.uploadStartDate = nil
                             }
-                        }
-                    )) {
-                        Text("Start Date")
-                            .font(IVFont.captionMedium)
+                            .font(IVFont.caption)
+                            .buttonStyle(.borderless)
                             .foregroundColor(.ivTextSecondary)
-                    }
-
-                    Spacer()
-
-                    if settings.uploadStartDate != nil {
-                        DatePicker(
-                            "",
-                            selection: Binding(
-                                get: { settings.uploadStartDate ?? Date() },
-                                set: { settings.uploadStartDate = $0 }
-                            ),
-                            displayedComponents: [.date]
-                        )
-                        .labelsHidden()
-                    }
-                }
-
-                Text("Media before this date will be ignored during upload scans.")
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivTextTertiary)
-
-                Divider()
-
-                Toggle("Exclude hidden assets", isOn: $settings.excludeHidden)
-                    .font(IVFont.body)
-                Toggle("Exclude screenshots", isOn: $settings.excludeScreenshots)
-                    .font(IVFont.body)
-                Toggle("Exclude shared library", isOn: $settings.excludeSharedLibrary)
-                    .font(IVFont.body)
-                Toggle("Favorites only", isOn: $settings.favoritesOnly)
-                    .font(IVFont.body)
-
-                Divider()
-
-                HStack(spacing: IVSpacing.xl) {
-                    Toggle("Photos", isOn: $settings.enablePhotos)
-                        .font(IVFont.body)
-                    Toggle("Videos", isOn: $settings.enableVideos)
-                        .font(IVFont.body)
-                    Toggle("Live Photos", isOn: $settings.enableLivePhotos)
-                        .font(IVFont.body)
-                }
-
-                Divider()
-
-                Picker("Edits & Variants", selection: $settings.editVariantsPolicy) {
-                    ForEach(EditVariantsPolicy.allCases) { policy in
-                        Text(policy.label).tag(policy)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                .font(IVFont.body)
-            }
-        }
-    }
-
-    // MARK: - Safety Rails Section
-
-    private var safetyRailsSection: some View {
-        settingsCard(title: "Safety Rails", icon: "shield.checkered") {
-            VStack(alignment: .leading, spacing: IVSpacing.md) {
-                HStack {
-                    Text("Max concurrent uploads")
-                        .font(IVFont.body)
-                        .foregroundColor(.ivTextPrimary)
-                    Spacer()
-                    Stepper(
-                        "\(settings.maxConcurrentUploads)",
-                        value: $settings.maxConcurrentUploads,
-                        in: 1...10
-                    )
-                    .frame(width: 120)
-                }
-
-                HStack {
-                    Text("Max concurrent transcodes")
-                        .font(IVFont.body)
-                        .foregroundColor(.ivTextPrimary)
-                    Spacer()
-                    Stepper(
-                        "\(settings.maxConcurrentTranscodes)",
-                        value: $settings.maxConcurrentTranscodes,
-                        in: 1...5
-                    )
-                    .frame(width: 120)
-                }
-
-                VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                    HStack {
-                        Text("Bandwidth limit")
+                        } else {
+                            Button("Set Date") {
+                                settings.uploadStartDate = Date()
+                            }
                             .font(IVFont.body)
-                            .foregroundColor(.ivTextPrimary)
+                            .buttonStyle(.bordered)
+                        }
                         Spacer()
-                        Text(settings.bandwidthLimitMBps == 0 ? "Unlimited" : String(format: "%.0f MB/s", settings.bandwidthLimitMBps))
-                            .font(IVFont.mono)
-                            .foregroundColor(.ivTextSecondary)
                     }
-                    Slider(value: $settings.bandwidthLimitMBps, in: 0...100, step: 5)
-                    Text("Set to 0 for unlimited bandwidth.")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
                 }
-            }
-        }
-    }
 
-    // MARK: - Maintenance Section
+                Divider()
 
-    private var maintenanceSection: some View {
-        settingsCard(title: "Maintenance Window", icon: "clock.badge.checkmark") {
-            VStack(alignment: .leading, spacing: IVSpacing.md) {
-                Toggle("Enable maintenance window", isOn: $settings.maintenanceWindowEnabled)
-                    .font(IVFont.body)
+                // Exclude toggles
+                VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                    Text("Exclude these items...")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
 
-                if settings.maintenanceWindowEnabled {
-                    HStack(spacing: IVSpacing.lg) {
-                        VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                            Text("Start Time")
-                                .font(IVFont.captionMedium)
-                                .foregroundColor(.ivTextSecondary)
-                            DatePicker("", selection: $settings.maintenanceWindowStart, displayedComponents: .hourAndMinute)
-                                .labelsHidden()
-                        }
-                        VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                            Text("End Time")
-                                .font(IVFont.captionMedium)
-                                .foregroundColor(.ivTextSecondary)
-                            DatePicker("", selection: $settings.maintenanceWindowEnd, displayedComponents: .hourAndMinute)
-                                .labelsHidden()
+                    VStack(spacing: IVSpacing.sm) {
+                        settingsToggle("Hidden Assets", isOn: $settings.excludeHidden)
+                        settingsToggle("Screenshots", isOn: $settings.excludeScreenshots)
+                        settingsToggle("Shared Library", isOn: $settings.excludeSharedLibrary)
+                        settingsToggle("Favorites Only", isOn: $settings.favoritesOnly)
+                    }
+                }
+
+                Divider()
+
+                // Media type toggles
+                VStack(spacing: IVSpacing.sm) {
+                    settingsToggle("Photos", isOn: $settings.enablePhotos)
+                    settingsToggle("Videos", isOn: $settings.enableVideos)
+                    settingsToggle("Live Photos", isOn: $settings.enableLivePhotos)
+                }
+
+                Divider()
+
+                // Edit variants
+                VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                    Text("Edits & Variants")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+
+                    Picker("", selection: $settings.editVariantsPolicy) {
+                        ForEach(EditVariantsPolicy.allCases) { policy in
+                            Text(policy.label).tag(policy)
                         }
                     }
-
-                    Text("Background operations (optimizer, scheduled uploads) will only run during this window.")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                 }
             }
         }
@@ -290,31 +146,24 @@ struct SettingsView: View {
     // MARK: - Optimizer Mode
 
     private var optimizerModeSection: some View {
-        settingsCard(title: "Optimizer Mode", icon: "gearshape.2") {
+        settingsCard(title: "Optimizer Mode", icon: "bolt") {
             VStack(alignment: .leading, spacing: IVSpacing.md) {
-                Toggle("Enable Optimizer Mode", isOn: $settings.optimizerModeEnabled)
-                    .font(IVFont.body)
+                HStack {
+                    VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                        Text("Enable Automatic Optimizer")
+                            .font(IVFont.bodyMedium)
+                            .foregroundColor(.ivTextPrimary)
+                        Text("Automatically transcode videos based on configured rules")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivTextSecondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $settings.optimizerModeEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
 
                 if settings.optimizerModeEnabled {
-                    // Warning: optimizer enabled but maintenance window disabled
-                    if !settings.maintenanceWindowEnabled {
-                        HStack(spacing: IVSpacing.sm) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.ivWarning)
-                                .font(.system(size: 12))
-                            Text("Maintenance window is disabled. The optimizer will run continuously while the app is open.")
-                                .font(IVFont.caption)
-                                .foregroundColor(.ivWarning)
-                        }
-                        .padding(IVSpacing.sm)
-                        .background {
-                            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
-                                .fill(Color.ivWarning.opacity(0.08))
-                        }
-                    }
-
-                    Divider()
-
                     // Scan interval
                     HStack {
                         Text("Scan interval")
@@ -333,12 +182,69 @@ struct SettingsView: View {
                         .frame(width: 100)
                     }
 
-                    Divider()
+                    // Warning when no maintenance window
+                    if !settings.maintenanceWindowEnabled {
+                        HStack(spacing: IVSpacing.sm) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.ivWarning)
+                                .font(.system(size: 12))
+                            Text("Maintenance window is disabled. The optimizer will run continuously while the app is open.")
+                                .font(IVFont.caption)
+                                .foregroundColor(.ivWarning)
+                        }
+                        .padding(IVSpacing.sm)
+                        .background {
+                            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                .fill(Color.ivWarning.opacity(0.08))
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-                    // Maintenance window days
+    // MARK: - Maintenance Window
+
+    private var maintenanceSection: some View {
+        settingsCard(title: "Maintenance Window", icon: "clock.badge.checkmark") {
+            VStack(alignment: .leading, spacing: IVSpacing.md) {
+                HStack {
+                    VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                        Text("Enable Maintenance Window")
+                            .font(IVFont.bodyMedium)
+                            .foregroundColor(.ivTextPrimary)
+                        Text("Run intensive tasks only during specific hours")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivTextSecondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $settings.maintenanceWindowEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+
+                if settings.maintenanceWindowEnabled {
+                    HStack(spacing: IVSpacing.lg) {
+                        VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                            Text("Start Time")
+                                .font(IVFont.caption)
+                                .foregroundColor(.ivTextSecondary)
+                            DatePicker("", selection: $settings.maintenanceWindowStart, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                        }
+                        VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                            Text("End Time")
+                                .font(IVFont.caption)
+                                .foregroundColor(.ivTextSecondary)
+                            DatePicker("", selection: $settings.maintenanceWindowEnd, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                        }
+                    }
+
+                    // Active days
                     VStack(alignment: .leading, spacing: IVSpacing.sm) {
                         Text("Active Days")
-                            .font(IVFont.captionMedium)
+                            .font(IVFont.caption)
                             .foregroundColor(.ivTextSecondary)
 
                         HStack(spacing: IVSpacing.sm) {
@@ -360,49 +266,20 @@ struct SettingsView: View {
                                         }
                                 }
                                 .buttonStyle(.borderless)
-                                .accessibilityLabel("\(dayName), \(settings.maintenanceWindowDays.contains(dayIndex) ? "active" : "inactive")")
-                                .accessibilityHint("Double-tap to toggle")
                             }
 
                             Spacer()
 
-                            Button("All") {
-                                settings.maintenanceWindowDays = Set(1...7)
-                            }
-                            .font(IVFont.caption)
-                            .buttonStyle(.borderless)
-                            .foregroundColor(.ivAccent)
-
-                            Button("None") {
-                                settings.maintenanceWindowDays = []
-                            }
-                            .font(IVFont.caption)
-                            .buttonStyle(.borderless)
-                            .foregroundColor(.ivAccent)
+                            Button("All") { settings.maintenanceWindowDays = Set(1...7) }
+                                .font(IVFont.caption)
+                                .buttonStyle(.borderless)
+                                .foregroundColor(.ivAccent)
+                            Button("None") { settings.maintenanceWindowDays = [] }
+                                .font(IVFont.caption)
+                                .buttonStyle(.borderless)
+                                .foregroundColor(.ivAccent)
                         }
                     }
-
-                    // Start / end time
-                    HStack(spacing: IVSpacing.lg) {
-                        VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                            Text("Start Time")
-                                .font(IVFont.captionMedium)
-                                .foregroundColor(.ivTextSecondary)
-                            DatePicker("", selection: $settings.maintenanceWindowStart, displayedComponents: .hourAndMinute)
-                                .labelsHidden()
-                        }
-                        VStack(alignment: .leading, spacing: IVSpacing.xs) {
-                            Text("End Time")
-                                .font(IVFont.captionMedium)
-                                .foregroundColor(.ivTextSecondary)
-                            DatePicker("", selection: $settings.maintenanceWindowEnd, displayedComponents: .hourAndMinute)
-                                .labelsHidden()
-                        }
-                    }
-
-                    Text("When enabled, the optimizer continuously scans for oversized videos and queues optimization jobs. It respects the maintenance window and bandwidth limits configured above.")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
                 }
             }
         }
@@ -426,12 +303,10 @@ struct SettingsView: View {
         settingsCard(title: "Provider API Keys", icon: "key") {
             VStack(alignment: .leading, spacing: IVSpacing.md) {
                 providerKeyRow(label: "CloudConvert", key: .cloudConvertAPIKey, providerType: .cloudConvert)
+                Divider()
                 providerKeyRow(label: "Convertio", key: .convertioAPIKey, providerType: .convertio)
+                Divider()
                 providerKeyRow(label: "FreeConvert", key: .freeConvertAPIKey, providerType: .freeConvert)
-
-                Text("Provider keys are stored securely in macOS Keychain. Only configure the providers you plan to use.")
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivTextTertiary)
             }
         }
     }
@@ -441,54 +316,13 @@ struct SettingsView: View {
         let keyExists = KeychainManager.shared.exists(key)
 
         VStack(alignment: .leading, spacing: IVSpacing.sm) {
-            // Header row: name + status
-            HStack(spacing: IVSpacing.md) {
-                Text(label)
-                    .font(IVFont.bodyMedium)
-                    .foregroundColor(.ivTextPrimary)
+            Text(label)
+                .font(IVFont.caption)
+                .foregroundColor(.ivTextSecondary)
 
-                Spacer()
-
-                if let healthy = providerHealthStatus[providerType] {
-                    Image(systemName: healthy ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundColor(healthy ? .ivSuccess : .ivError)
-                        .font(.system(size: 14))
-                }
-
-                if keyExists {
-                    Button {
-                        Task { await testProvider(providerType) }
-                    } label: {
-                        HStack(spacing: IVSpacing.xs) {
-                            if providerHealthChecking.contains(providerType) {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .frame(width: 12, height: 12)
-                            }
-                            Text(providerHealthChecking.contains(providerType) ? "Testing..." : "Test")
-                        }
-                    }
-                    .disabled(providerHealthChecking.contains(providerType))
-                    .font(IVFont.caption)
-                }
-
-                IVStatusBadge(
-                    keyExists ? "Saved" : "Missing",
-                    status: keyExists ? .success : .idle
-                )
-            }
-
-            // Current key display
-            if let redacted = KeychainManager.shared.readRedacted(key) {
-                Text(redacted)
-                    .font(IVFont.mono)
-                    .foregroundColor(.ivTextTertiary)
-            }
-
-            // Input row: SecureField + Save + Delete
             HStack(spacing: IVSpacing.sm) {
                 SecureField(
-                    keyExists ? "Enter new API key to replace" : "Paste \(label) API key",
+                    keyExists ? "Enter new key to replace..." : "Enter API key...",
                     text: Binding(
                         get: { providerKeyInputs[providerType] ?? "" },
                         set: { providerKeyInputs[providerType] = $0 }
@@ -500,34 +334,311 @@ struct SettingsView: View {
                 Button("Save") {
                     saveProviderKey(providerType: providerType, key: key)
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled((providerKeyInputs[providerType] ?? "").isEmpty)
 
                 if keyExists {
+                    Button("Test") {
+                        Task { await testProvider(providerType) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(providerHealthChecking.contains(providerType))
+                }
+            }
+
+            // Status indicators
+            HStack(spacing: IVSpacing.md) {
+                if keyExists {
+                    HStack(spacing: IVSpacing.xxs) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.ivSuccess)
+                            .font(.system(size: 10))
+                        Text("Key saved")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivSuccess)
+                    }
+                }
+
+                if let healthy = providerHealthStatus[providerType] {
+                    HStack(spacing: IVSpacing.xxs) {
+                        Image(systemName: healthy ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(healthy ? .ivSuccess : .ivError)
+                            .font(.system(size: 10))
+                        Text(healthy ? "Connected" : "Unavailable")
+                            .font(IVFont.caption)
+                            .foregroundColor(healthy ? .ivSuccess : .ivError)
+                    }
+                }
+
+                if providerKeySaveState[providerType] == true {
+                    Text("Saved to Keychain")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivSuccess)
+                        .transition(.opacity)
+                }
+
+                if keyExists {
+                    Spacer()
                     Button("Delete") {
                         deleteProviderKey(providerType: providerType, key: key)
                     }
+                    .font(IVFont.caption)
+                    .buttonStyle(.borderless)
                     .foregroundColor(.ivError)
                 }
             }
-
-            // Transient save confirmation
-            if providerKeySaveState[providerType] == true {
-                HStack(spacing: IVSpacing.xs) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.ivSuccess)
-                        .font(.system(size: 11))
-                    Text("Key saved to Keychain")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivSuccess)
-                }
-                .transition(.opacity)
-            }
-        }
-
-        if providerType != .freeConvert {
-            Divider()
         }
     }
+
+    // MARK: - Bandwidth Limits
+
+    private var bandwidthSection: some View {
+        settingsCard(title: "Bandwidth Limits", icon: "wifi") {
+            VStack(alignment: .leading, spacing: IVSpacing.md) {
+                // Max concurrent uploads
+                VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                    Text("Max Concurrent Uploads")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+                    HStack {
+                        Button {
+                            if settings.maxConcurrentUploads > 1 { settings.maxConcurrentUploads -= 1 }
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.system(size: 11))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Text("\(settings.maxConcurrentUploads)")
+                            .font(IVFont.bodyMedium)
+                            .foregroundColor(.ivTextPrimary)
+                            .frame(minWidth: 40)
+                            .multilineTextAlignment(.center)
+
+                        Button {
+                            if settings.maxConcurrentUploads < 10 { settings.maxConcurrentUploads += 1 }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+                    }
+                }
+
+                // Max concurrent transcodes
+                VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                    Text("Max Concurrent Transcodes")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+                    HStack {
+                        Button {
+                            if settings.maxConcurrentTranscodes > 1 { settings.maxConcurrentTranscodes -= 1 }
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.system(size: 11))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Text("\(settings.maxConcurrentTranscodes)")
+                            .font(IVFont.bodyMedium)
+                            .foregroundColor(.ivTextPrimary)
+                            .frame(minWidth: 40)
+                            .multilineTextAlignment(.center)
+
+                        Button {
+                            if settings.maxConcurrentTranscodes < 5 { settings.maxConcurrentTranscodes += 1 }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+                    }
+                }
+
+                // Bandwidth limit slider
+                VStack(alignment: .leading, spacing: IVSpacing.xs) {
+                    Text("Bandwidth Limit")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+                    HStack(spacing: IVSpacing.md) {
+                        Slider(value: $settings.bandwidthLimitMBps, in: 0...100, step: 5)
+                        Text(settings.bandwidthLimitMBps == 0 ? "Unlimited" : String(format: "%.0f MB/s", settings.bandwidthLimitMBps))
+                            .font(IVFont.monoSmall)
+                            .foregroundColor(.ivTextPrimary)
+                            .frame(width: 80, alignment: .trailing)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Database
+
+    private var databaseSection: some View {
+        settingsCard(title: "Database", icon: "externaldrive") {
+            VStack(alignment: .leading, spacing: IVSpacing.md) {
+                databaseActionRow(
+                    title: "Reveal In Finder",
+                    subtitle: "Open database location in Finder",
+                    icon: "folder",
+                    buttonTitle: "Reveal"
+                ) {
+                    revealDatabaseInFinder()
+                }
+
+                Divider()
+
+                databaseActionRow(
+                    title: "Export Database",
+                    subtitle: "Backup all settings and job history",
+                    icon: "arrow.down.doc",
+                    buttonTitle: "Export"
+                ) {
+                    exportDatabaseSnapshot()
+                }
+
+                Divider()
+
+                databaseActionRow(
+                    title: "Import Database",
+                    subtitle: "Restore from a previous backup",
+                    icon: "arrow.up.doc",
+                    buttonTitle: "Import"
+                ) {
+                    importDatabaseSnapshot()
+                }
+
+                if let error = dbExportError ?? dbImportError {
+                    HStack(spacing: IVSpacing.xs) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.ivError)
+                            .font(.system(size: 11))
+                        Text(error)
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivError)
+                    }
+                }
+            }
+        }
+    }
+
+    private func databaseActionRow(title: String, subtitle: String, icon: String, buttonTitle: String, action: @escaping () -> Void) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                Text(title)
+                    .font(IVFont.bodyMedium)
+                    .foregroundColor(.ivTextPrimary)
+                Text(subtitle)
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+            }
+            Spacer()
+            Button {
+                action()
+            } label: {
+                HStack(spacing: IVSpacing.xxs) {
+                    Image(systemName: icon)
+                        .font(.system(size: 11))
+                    Text(buttonTitle)
+                }
+                .font(IVFont.bodyMedium)
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    // MARK: - Danger Zone
+
+    private var dangerZoneSection: some View {
+        VStack(alignment: .leading, spacing: IVSpacing.md) {
+            HStack(spacing: IVSpacing.sm) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundColor(.ivError)
+                Text("Danger Zone")
+                    .font(IVFont.headline)
+                    .foregroundColor(.ivError)
+            }
+
+            HStack {
+                VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                    Text("Reset Onboarding")
+                        .font(IVFont.bodyMedium)
+                        .foregroundColor(.ivTextPrimary)
+                    Text("Clear saved connection and return to setup screen.")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+                }
+                Spacer()
+                Button("Reset") {
+                    showResetAlert = true
+                }
+                .foregroundColor(.ivError)
+            }
+            .padding(IVSpacing.lg)
+            .background {
+                RoundedRectangle(cornerRadius: IVCornerRadius.lg)
+                    .stroke(Color.ivError.opacity(0.3), lineWidth: 1)
+            }
+        }
+        .alert("Reset Onboarding?", isPresented: $showResetAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                resetOnboarding()
+            }
+        } message: {
+            Text("This will clear your saved Immich connection and return to the setup screen. Your database and upload history will be preserved.")
+        }
+    }
+
+    // MARK: - Settings Card Helper
+
+    private func settingsCard<Content: View>(title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: IVSpacing.md) {
+            HStack(spacing: IVSpacing.sm) {
+                Image(systemName: icon)
+                    .font(.system(size: 13))
+                    .foregroundColor(.ivTextSecondary)
+                Text(title)
+                    .font(IVFont.bodyMedium)
+                    .foregroundColor(.ivTextPrimary)
+            }
+
+            content()
+        }
+        .padding(IVSpacing.lg)
+        .background {
+            RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                .fill(Color.ivSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                )
+        }
+    }
+
+    // MARK: - Settings Toggle Helper (matches Figma layout)
+
+    private func settingsToggle(_ label: String, isOn: Binding<Bool>) -> some View {
+        HStack {
+            Text(label)
+                .font(IVFont.body)
+                .foregroundColor(.ivTextPrimary)
+            Spacer()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+    }
+
+    // MARK: - Provider Key Actions
 
     private func saveProviderKey(providerType: TranscodeProviderType, key: KeychainManager.Key) {
         guard let value = providerKeyInputs[providerType], !value.isEmpty else { return }
@@ -544,7 +655,6 @@ struct SettingsView: View {
                 category: .keychain,
                 message: "\(providerType.label) API key configured"
             )
-            // Auto-dismiss after 3 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     self.providerKeySaveState[providerType] = nil
@@ -578,158 +688,7 @@ struct SettingsView: View {
         providerHealthChecking.remove(providerType)
     }
 
-    // MARK: - Database Section
-
-    private var databaseSection: some View {
-        settingsCard(title: "Database", icon: "externaldrive") {
-            VStack(alignment: .leading, spacing: IVSpacing.md) {
-                if let version = dbSchemaVersion {
-                    HStack(spacing: IVSpacing.sm) {
-                        Text("Schema Version")
-                            .font(IVFont.captionMedium)
-                            .foregroundColor(.ivTextSecondary)
-                        Text("v\(version)")
-                            .font(IVFont.mono)
-                            .foregroundColor(.ivTextPrimary)
-                    }
-                }
-
-                HStack(spacing: IVSpacing.md) {
-                    Button("Reveal in Finder") {
-                        revealDatabaseInFinder()
-                    }
-                    Button("Export Snapshot") {
-                        exportDatabaseSnapshot()
-                    }
-                    Button("Import Snapshot") {
-                        importDatabaseSnapshot()
-                    }
-                }
-
-                if let error = dbExportError ?? dbImportError {
-                    HStack(spacing: IVSpacing.xs) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.ivError)
-                            .font(.system(size: 11))
-                        Text(error)
-                            .font(IVFont.caption)
-                            .foregroundColor(.ivError)
-                    }
-                }
-
-                Text("Export creates a portable copy of the database. Import validates schema version and runs migrations.")
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivTextTertiary)
-            }
-        }
-        .onAppear { loadSchemaVersion() }
-    }
-
-    // MARK: - Danger Zone
-
-    private var dangerZoneSection: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
-            HStack(spacing: IVSpacing.sm) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundColor(.ivError)
-                Text("Danger Zone")
-                    .font(IVFont.headline)
-                    .foregroundColor(.ivError)
-            }
-
-            HStack {
-                VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
-                    Text("Reset Onboarding")
-                        .font(IVFont.bodyMedium)
-                        .foregroundColor(.ivTextPrimary)
-                    Text("Clear saved connection and return to setup screen.")
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextSecondary)
-                }
-                Spacer()
-                Button("Reset") {
-                    showResetOnboardingAlert = true
-                }
-                .foregroundColor(.ivError)
-            }
-            .padding(IVSpacing.lg)
-            .background {
-                RoundedRectangle(cornerRadius: IVCornerRadius.lg)
-                    .stroke(Color.ivError.opacity(0.3), lineWidth: 1)
-            }
-        }
-        .alert("Reset Onboarding?", isPresented: $showResetOnboardingAlert) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset", role: .destructive) {
-                resetOnboarding()
-            }
-        } message: {
-            Text("This will clear your saved Immich connection and return to the setup screen. Your database and upload history will be preserved.")
-        }
-    }
-
-    // MARK: - Settings Card Helper
-
-    private func settingsCard<Content: View>(title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: IVSpacing.md) {
-            HStack(spacing: IVSpacing.sm) {
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundColor(.ivAccent)
-                Text(title)
-                    .font(IVFont.headline)
-                    .foregroundColor(.ivTextPrimary)
-            }
-
-            content()
-        }
-        .padding(IVSpacing.lg)
-        .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.lg)
-                .fill(Color.ivSurface)
-                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
-        }
-    }
-
-    // MARK: - Actions
-
-    private func saveAPIKey() {
-        do {
-            try KeychainManager.shared.save(newAPIKey, for: .immichAPIKey)
-            newAPIKey = ""
-            LogManager.shared.info("API key updated in Keychain", category: .keychain)
-        } catch {
-            LogManager.shared.error("Failed to save API key: \(error.localizedDescription)", category: .keychain)
-        }
-    }
-
-    private func testConnection() async {
-        isTestingConnection = true
-        connectionTestResult = nil
-
-        do {
-            let apiKey = try KeychainManager.shared.read(.immichAPIKey)
-            let client = ImmichClient()
-            let result = try await client.testConnection(
-                serverURL: settings.immichServerURL,
-                apiKey: apiKey
-            )
-
-            appState.connectionStatus = .connected(
-                version: result.server.version,
-                user: result.user.name
-            )
-            appState.isConnectedToImmich = true
-
-            connectionTestResult = .success("Connected (\(result.user.name))")
-        } catch {
-            connectionTestResult = .failure(error.localizedDescription)
-            appState.connectionStatus = .failed(error.localizedDescription)
-            appState.isConnectedToImmich = false
-        }
-
-        isTestingConnection = false
-    }
+    // MARK: - Database Actions
 
     private func revealDatabaseInFinder() {
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
@@ -780,7 +739,7 @@ struct SettingsView: View {
         panel.allowedContentTypes = [.database]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Select an ImmichVault database snapshot to import. Your current database will be backed up first."
+        panel.message = "Select an ImmichVault database snapshot to import."
 
         panel.begin { result in
             if result == .OK, let url = panel.url {

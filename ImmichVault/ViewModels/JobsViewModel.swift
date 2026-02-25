@@ -166,6 +166,21 @@ public final class JobsViewModel: ObservableObject {
         jobs.filter { $0.state.isTerminal || $0.state == .failedRetryable }.count
     }
 
+    /// Number of currently active or pending jobs.
+    var activeJobCount: Int {
+        jobs.filter { $0.state.isActive || $0.state == .pending }.count
+    }
+
+    /// Number of jobs completed today.
+    var completedTodayCount: Int {
+        jobs.filter { $0.state == .completed && Calendar.current.isDateInToday($0.updatedAt) }.count
+    }
+
+    /// Number of jobs that failed today.
+    var failedTodayCount: Int {
+        jobs.filter { $0.state.isFailed && Calendar.current.isDateInToday($0.updatedAt) }.count
+    }
+
     /// Deletes all finished jobs (completed, failed, cancelled) from the database.
     func clearFinishedJobs() {
         do {

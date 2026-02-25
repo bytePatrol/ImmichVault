@@ -69,6 +69,7 @@ Find oversized videos on your Immich server and transcode them to dramatically r
 - **Metadata Preservation** — Three-layer metadata pipeline ensures GPS coordinates, creation dates, camera make/model, lens info, and rotation survive transcoding
 - **Safe Replacement** — Transcoded videos replace originals on Immich via the `replaceAsset` API only after passing strict metadata validation
 - **Manual Encode** — Paste any Immich asset ID or URL to transcode a single video with custom settings
+- **Inspector Panel** — Detailed side panel showing full asset metadata, codec info, and encoding details
 
 ### Rules Engine
 
@@ -88,6 +89,7 @@ Define automatic optimization rules that match videos by size, date range, album
 - **Filter & Sort** — View jobs by status (active, completed, failed, cancelled) with multiple sort options
 - **Retry & Cancel** — One-click retry for failed jobs or cancel active ones
 - **Space Savings** — Track total storage saved across all completed optimizations
+- **Clear Finished** — One-click cleanup of completed and cancelled jobs
 
 ### Activity Log
 
@@ -99,6 +101,17 @@ Define automatic optimization rules that match videos by size, date range, album
 - **Export** — Export logs as JSON or CSV for external analysis
 - **Secret Redaction** — API keys and sensitive data are automatically redacted from all log entries
 
+### Settings
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Settings" width="800">
+</p>
+
+- **Upload Filters** — Configure start date, album rules, media types, and edit preferences
+- **Optimizer Mode** — Enable automatic transcoding with configurable maintenance windows
+- **Safety Rails** — Configurable concurrency limits, bandwidth caps, and scheduling
+- **Rate Limiting** — Per-provider rate limits and daily/weekly/monthly cost caps for cloud transcoding
+
 ### Dashboard
 
 At-a-glance overview of your ImmichVault activity:
@@ -108,12 +121,9 @@ At-a-glance overview of your ImmichVault activity:
 - Optimizer status with active rule count
 - Recent activity timeline with direct links to details
 
-### Settings & Safety
+### Security
 
 - **Keychain Storage** — All API keys stored securely in the macOS Keychain (never plaintext)
-- **Upload Filters** — Configure start date, album rules, media types, and edit preferences
-- **Safety Rails** — Configurable concurrency limits, bandwidth caps, and maintenance windows
-- **Rate Limiting** — Per-provider rate limits and daily/weekly/monthly cost caps for cloud transcoding
 - **Database Portability** — Export/import your database snapshot to migrate between Macs
 - **No App Sandbox** — Full Photos library access without sandbox restrictions
 

@@ -410,6 +410,7 @@ public final class ImmichClient: Sendable {
         public let latitude: Double?
         public let longitude: Double?
         public let dateTimeOriginal: String?   // ISO8601 string from exifInfo
+        public let thumbhash: String?          // Base64-encoded ThumbHash for placeholder thumbnails
     }
 
     // MARK: - Search Result
@@ -779,6 +780,66 @@ public final class ImmichClient: Sendable {
         }
     }
 
+    // MARK: - Thumbnail
+
+    public enum ThumbnailSize: String, Sendable {
+        case thumbnail = "thumbnail"   // 250px
+        case preview = "preview"       // 1440px
+    }
+
+    /// Fetches a thumbnail image for an asset via GET /api/assets/{id}/thumbnail.
+    ///
+    /// - Parameters:
+    ///   - assetId: The Immich asset ID
+    ///   - size: Thumbnail size (.thumbnail = 250px, .preview = 1440px)
+    ///   - serverURL: Immich server URL
+    ///   - apiKey: Immich API key
+    /// - Returns: Raw image data (WebP/JPEG from Immich)
+    public func fetchThumbnail(
+        assetId: String,
+        size: ThumbnailSize = .thumbnail,
+        serverURL: String,
+        apiKey: String
+    ) async throws -> Data {
+        guard let baseURL = URL(string: normalizeURL(serverURL)) else {
+            throw ImmichError.invalidURL
+        }
+
+        var components = URLComponents(url: baseURL.appendingPathComponent("api/assets/\(assetId)/thumbnail"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "size", value: size.rawValue)]
+
+        guard let url = components.url else {
+            throw ImmichError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.timeoutInterval = 30
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ImmichError.downloadFailed("Invalid response type")
+            }
+
+            switch httpResponse.statusCode {
+            case 200:
+                return data
+            case 401:
+                throw ImmichError.authenticationFailed
+            case 404:
+                throw ImmichError.assetNotFoundOnServer(assetId)
+            default:
+                throw ImmichError.downloadFailed("HTTP \(httpResponse.statusCode)")
+            }
+        } catch let error as ImmichError {
+            throw error
+        } catch {
+            throw ImmichError.downloadFailed(error.localizedDescription)
+        }
+    }
+
     // MARK: - Asset Detail Parsing
 
     /// Parses a JSON dictionary from the Immich API into an ImmichAssetDetail.
@@ -828,7 +889,8 @@ public final class ImmichClient: Sendable {
             model: exifInfo?["model"] as? String,
             latitude: exifInfo?["latitude"] as? Double,
             longitude: exifInfo?["longitude"] as? Double,
-            dateTimeOriginal: exifInfo?["dateTimeOriginal"] as? String
+            dateTimeOriginal: exifInfo?["dateTimeOriginal"] as? String,
+            thumbhash: json["thumbhash"] as? String
         )
     }
 

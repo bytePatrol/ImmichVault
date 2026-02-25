@@ -24,13 +24,14 @@ final class AppState: ObservableObject {
 
 // MARK: - Navigation Items
 
-enum NavigationItem: String, CaseIterable, Identifiable {
+enum NavigationItem: String, Identifiable, CaseIterable {
     case dashboard
     case photosUpload
     case optimizer
     case jobs
-    case logs
+    case setup
     case settings
+    case logs
 
     var id: String { rawValue }
 
@@ -40,8 +41,9 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         case .photosUpload: return "Photos Upload"
         case .optimizer: return "Optimizer"
         case .jobs: return "Jobs"
-        case .logs: return "Logs"
+        case .setup: return "Setup"
         case .settings: return "Settings"
+        case .logs: return "Logs"
         }
     }
 
@@ -49,26 +51,29 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "square.grid.2x2"
         case .photosUpload: return "photo.on.rectangle.angled"
-        case .optimizer: return "wand.and.stars"
-        case .jobs: return "play.rectangle"
-        case .logs: return "list.bullet.rectangle"
-        case .settings: return "gear"
+        case .optimizer: return "bolt"
+        case .jobs: return "checklist"
+        case .setup: return "server.rack"
+        case .settings: return "gearshape"
+        case .logs: return "doc.text"
         }
     }
 
     var section: NavigationSection {
         switch self {
-        case .photosUpload, .optimizer, .jobs: return .library
-        case .dashboard, .logs: return .monitoring
-        case .settings: return .system
+        case .dashboard: return .overview
+        case .photosUpload, .optimizer: return .workflow
+        case .jobs: return .monitoring
+        case .setup, .settings, .logs: return .system
         }
     }
 }
 
 enum NavigationSection: String, CaseIterable {
-    case library = "Library"
-    case monitoring = "Monitoring"
-    case system = "System"
+    case overview
+    case workflow
+    case monitoring
+    case system
 
     var items: [NavigationItem] {
         NavigationItem.allCases.filter { $0.section == self }

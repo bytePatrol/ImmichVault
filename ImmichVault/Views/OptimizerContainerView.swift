@@ -1,8 +1,10 @@
 import SwiftUI
 
 // MARK: - Optimizer Container View
-// Owns both ViewModels and provides a unified toolbar with segmented picker.
+// Owns both ViewModels and provides a unified in-content toolbar.
 // Uses ZStack with opacity toggling so both sub-views stay alive across tab switches.
+// Figma: custom toolbar bar (not native macOS toolbar) with Rules, List/Grid, Inspector
+// on left; Auto/Manual toggle, Queue Selected, Scan Immich on right.
 
 struct OptimizerContainerView: View {
     enum OptimizerTab: String, CaseIterable {
@@ -25,13 +27,19 @@ struct OptimizerContainerView: View {
     }
 
     var body: some View {
-        ZStack {
-            OptimizerView(viewModel: optimizerVM)
-                .opacity(selectedTab == .autoOptimizer ? 1 : 0)
-                .allowsHitTesting(selectedTab == .autoOptimizer)
-            ManualEncodeView(viewModel: manualEncodeVM)
-                .opacity(selectedTab == .manualEncode ? 1 : 0)
-                .allowsHitTesting(selectedTab == .manualEncode)
+        VStack(spacing: 0) {
+            // Custom in-content toolbar (Figma: not in native titlebar)
+            optimizerToolbar
+            Divider()
+
+            ZStack {
+                OptimizerView(viewModel: optimizerVM)
+                    .opacity(selectedTab == .autoOptimizer ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .autoOptimizer)
+                ManualEncodeView(viewModel: manualEncodeVM)
+                    .opacity(selectedTab == .manualEncode ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .manualEncode)
+            }
         }
         .modifier(
             OptimizerInspectorModifier(
@@ -40,6 +48,8 @@ struct OptimizerContainerView: View {
                 preset: optimizerVM.effectivePreset,
                 provider: optimizerVM.selectedProvider,
                 ruleMatches: optimizerVM.ruleMatches,
+                serverURL: optimizerVM.cachedServerURL,
+                apiKey: optimizerVM.cachedAPIKey,
                 estimatedCost: { candidate in
                     candidateEstimatedCost(candidate)
                 },
@@ -48,97 +58,205 @@ struct OptimizerContainerView: View {
                 }
             )
         )
-        .toolbar {
-            // Guard all items so they only appear on the Optimizer tab
-            if appState.selectedNavItem == .optimizer {
-                // Center: segmented picker
-                ToolbarItem(placement: .principal) {
-                    Picker("", selection: $selectedTab) {
-                        ForEach(OptimizerTab.allCases, id: \.self) { tab in
-                            Text(tab.rawValue).tag(tab)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 240)
-                    .labelsHidden()
-                }
-
-                // Primary: Queue Selected on the right (trailing)
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if selectedTab == .autoOptimizer {
-                        if optimizerVM.isProcessing {
-                            Button {
-                                optimizerVM.stopTranscoding()
-                            } label: {
-                                Label("Stop", systemImage: "stop.circle")
-                            }
-                            .tint(.ivError)
-                        } else if !optimizerVM.candidates.isEmpty && optimizerVM.selectedCandidateCount > 0 {
-                            Button {
-                                optimizerVM.startTranscoding()
-                            } label: {
-                                Text("Queue Selected (\(optimizerVM.selectedCandidateCount))")
-                                    .fontWeight(.medium)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .keyboardShortcut(KeyEquivalent.return, modifiers: [.command])
-                        }
-
-                        Button {
-                            Task { await optimizerVM.scanForCandidates() }
-                        } label: {
-                            HStack(spacing: IVSpacing.xxs) {
-                                Image(systemName: "arrow.clockwise")
-                                Text(optimizerVM.isDiscovering ? "Scanning..." : "Scan Immich")
-                            }
-                            .font(IVFont.bodyMedium)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(optimizerVM.isDiscovering || optimizerVM.isProcessing)
-                        .keyboardShortcut("r", modifiers: .command)
-                        .help("Scan Immich for candidates")
-                    }
-                }
-
-                // Secondary: Rules + Inspector + Scan on the left
-                ToolbarItem(placement: .secondaryAction) {
-                    if selectedTab == .autoOptimizer {
-                        HStack(spacing: IVSpacing.xs) {
-                            Button {
-                                optimizerVM.showRulesEditor = true
-                            } label: {
-                                HStack(spacing: IVSpacing.xxs) {
-                                    Image(systemName: "list.bullet.rectangle")
-                                    Text("Rules")
-                                }
-                                .font(IVFont.bodyMedium)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Edit Transcode Rules")
-
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    optimizerVM.showInspector.toggle()
-                                }
-                            } label: {
-                                HStack(spacing: IVSpacing.xxs) {
-                                    Image(systemName: "sidebar.trailing")
-                                    Text("Inspector")
-                                }
-                                .font(IVFont.bodyMedium)
-                                .foregroundColor(optimizerVM.showInspector ? .ivAccent : .secondary)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Toggle Inspector")
-                            .keyboardShortcut("i", modifiers: .command)
-                        }
-                    }
-                }
-            }
-        }
         .sheet(isPresented: $optimizerVM.showRulesEditor) {
             RulesEditorView()
         }
+    }
+
+    // MARK: - Custom Toolbar (Figma: in-content bar)
+
+    private var optimizerToolbar: some View {
+        HStack(spacing: IVSpacing.md) {
+            // Left group: Rules, divider, List/Grid, Inspector
+            HStack(spacing: IVSpacing.xs) {
+                if selectedTab == .autoOptimizer {
+                    // Rules button
+                    Button {
+                        optimizerVM.showRulesEditor = true
+                    } label: {
+                        HStack(spacing: IVSpacing.xxs) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 12))
+                            Text("Rules")
+                                .font(IVFont.captionMedium)
+                        }
+                        .padding(.horizontal, IVSpacing.sm)
+                        .padding(.vertical, IVSpacing.xs)
+                        .background {
+                            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                .fill(Color.ivSurface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                                )
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.ivTextPrimary)
+                    .help("Edit Transcode Rules")
+
+                    // Divider
+                    Rectangle()
+                        .fill(Color.ivBorder)
+                        .frame(width: 1, height: 16)
+
+                    // List/Grid toggle group
+                    HStack(spacing: 0) {
+                        viewModeButton(icon: "list.bullet", mode: .list)
+                        viewModeButton(icon: "square.grid.2x2", mode: .grid)
+                    }
+                    .background {
+                        RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                            .fill(Color.ivSurface)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                    .stroke(Color.ivBorder, lineWidth: 0.5)
+                            )
+                    }
+
+                    // Inspector toggle
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            optimizerVM.showInspector.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: IVSpacing.xxs) {
+                            Image(systemName: "sidebar.trailing")
+                                .font(.system(size: 12))
+                            Text("Inspector")
+                                .font(IVFont.captionMedium)
+                        }
+                        .padding(.horizontal, IVSpacing.sm)
+                        .padding(.vertical, IVSpacing.xs)
+                        .background {
+                            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                .fill(optimizerVM.showInspector ? Color.ivAccent.opacity(0.12) : Color.ivSurface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                        .stroke(optimizerVM.showInspector ? Color.ivAccent.opacity(0.2) : Color.ivBorder, lineWidth: 0.5)
+                                )
+                        }
+                        .foregroundColor(optimizerVM.showInspector ? .ivAccent : .ivTextPrimary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle Inspector")
+                    .keyboardShortcut("i", modifiers: .command)
+                }
+            }
+
+            Spacer()
+
+            // Right group: Auto/Manual toggle, Queue Selected, Scan Immich
+            HStack(spacing: IVSpacing.sm) {
+                // Segmented tab picker
+                Picker("", selection: $selectedTab) {
+                    ForEach(OptimizerTab.allCases, id: \.self) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 240)
+                .labelsHidden()
+
+                if selectedTab == .autoOptimizer {
+                    // Queue Selected / Stop button
+                    if optimizerVM.isProcessing {
+                        Button {
+                            optimizerVM.stopTranscoding()
+                        } label: {
+                            HStack(spacing: IVSpacing.xxs) {
+                                Image(systemName: "stop.circle")
+                                    .font(.system(size: 12))
+                                Text("Stop")
+                                    .font(IVFont.captionMedium)
+                            }
+                            .padding(.horizontal, IVSpacing.sm)
+                            .padding(.vertical, IVSpacing.xs)
+                            .background {
+                                RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                    .fill(Color.ivError.opacity(0.12))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                            .stroke(Color.ivError.opacity(0.2), lineWidth: 0.5)
+                                    )
+                            }
+                            .foregroundColor(.ivError)
+                        }
+                        .buttonStyle(.plain)
+                    } else if !optimizerVM.candidates.isEmpty && optimizerVM.selectedCandidateCount > 0 {
+                        Button {
+                            optimizerVM.startTranscoding()
+                        } label: {
+                            HStack(spacing: IVSpacing.xxs) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 10))
+                                Text("Queue Selected (\(optimizerVM.selectedCandidateCount))")
+                                    .font(IVFont.captionMedium)
+                            }
+                            .padding(.horizontal, IVSpacing.md)
+                            .padding(.vertical, IVSpacing.xs)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .keyboardShortcut(KeyEquivalent.return, modifiers: [.command])
+                    }
+
+                    // Scan Immich button
+                    Button {
+                        Task { await optimizerVM.scanForCandidates() }
+                    } label: {
+                        HStack(spacing: IVSpacing.xxs) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12))
+                            Text(optimizerVM.isDiscovering ? "Scanning..." : "Scan Immich")
+                                .font(IVFont.captionMedium)
+                        }
+                        .padding(.horizontal, IVSpacing.sm)
+                        .padding(.vertical, IVSpacing.xs)
+                        .background {
+                            RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                .fill(Color.ivSurface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                                        .stroke(Color.ivBorder, lineWidth: 0.5)
+                                )
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.ivTextPrimary)
+                    .disabled(optimizerVM.isDiscovering || optimizerVM.isProcessing)
+                    .keyboardShortcut("r", modifiers: .command)
+                    .help("Scan Immich for candidates")
+                }
+            }
+        }
+        .padding(.horizontal, IVSpacing.lg)
+        .padding(.vertical, IVSpacing.sm)
+        .background(Color.ivBackground)
+    }
+
+    // MARK: - View Mode Toggle Button
+
+    private func viewModeButton(icon: String, mode: OptimizerViewModel.ViewMode) -> some View {
+        let isActive = optimizerVM.viewMode == mode
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                optimizerVM.viewMode = mode
+            }
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .padding(.horizontal, IVSpacing.sm)
+                .padding(.vertical, IVSpacing.xs)
+                .background {
+                    if isActive {
+                        RoundedRectangle(cornerRadius: IVCornerRadius.sm - 1)
+                            .fill(Color.ivAccent.opacity(0.12))
+                    }
+                }
+                .foregroundColor(isActive ? .ivAccent : .ivTextSecondary)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Helpers
@@ -162,6 +280,8 @@ struct OptimizerInspectorModifier: ViewModifier {
     let preset: TranscodePreset
     let provider: TranscodeProviderType
     let ruleMatches: [String: TranscodeRule]
+    let serverURL: String
+    let apiKey: String
     let estimatedCost: (TranscodeCandidate) -> Double?
     let onTranscodeNow: (String) -> Void
 
@@ -195,6 +315,8 @@ struct OptimizerInspectorModifier: ViewModifier {
                 provider: provider,
                 estimatedCost: estimatedCost(candidate),
                 matchedRule: ruleMatches[candidate.id],
+                serverURL: serverURL,
+                apiKey: apiKey,
                 onTranscodeNow: {
                     onTranscodeNow(candidate.id)
                 }

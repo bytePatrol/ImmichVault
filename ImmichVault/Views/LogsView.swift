@@ -28,6 +28,11 @@ struct LogsView: View {
             } else {
                 logTable
             }
+
+            // Stats bar
+            if !viewModel.entries.isEmpty {
+                statsBar
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { viewModel.loadLogs() }
@@ -42,7 +47,14 @@ struct LogsView: View {
 
     private var logsToolbar: some View {
         HStack(spacing: IVSpacing.md) {
-            IVSectionHeader("Activity Log", subtitle: "\(viewModel.totalCount) entries")
+            VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
+                Text("Activity Logs")
+                    .font(IVFont.displayMedium)
+                    .foregroundColor(.ivTextPrimary)
+                Text("Searchable activity log with filtering and export")
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+            }
 
             Spacer()
 
@@ -51,7 +63,7 @@ struct LogsView: View {
                 Button("Export as JSON") { exportFile(format: .json) }
                 Button("Export as CSV") { exportFile(format: .csv) }
             } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
+                Label("Export Logs", systemImage: "square.and.arrow.up")
                     .font(IVFont.bodyMedium)
             }
             .menuStyle(.borderlessButton)
@@ -109,22 +121,23 @@ struct LogsView: View {
             }
             .frame(maxWidth: 280)
 
-            // Level filter
-            Picker("Level", selection: $viewModel.selectedLevel) {
-                Text("All Levels").tag(nil as LogLevel?)
-                Divider()
-                ForEach([LogLevel.error, .warning, .info, .debug], id: \.self) { level in
-                    HStack {
-                        Circle()
-                            .fill(levelColor(level))
-                            .frame(width: 6, height: 6)
-                        Text(level.rawValue.capitalized)
-                    }
-                    .tag(level as LogLevel?)
-                }
+            // Level filter (segmented button group)
+            HStack(spacing: 0) {
+                levelFilterButton("All", level: nil)
+                levelFilterButton("Info", level: .info)
+                levelFilterButton("Warning", level: .warning)
+                levelFilterButton("Error", level: .error)
+                levelFilterButton("Debug", level: .debug)
             }
-            .frame(width: 130)
-            .onChange(of: viewModel.selectedLevel) { _ in viewModel.loadLogs() }
+            .background {
+                RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                    .fill(Color.ivSurface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: IVCornerRadius.sm)
+                            .stroke(Color.ivBorder, lineWidth: 0.5)
+                    )
+            }
+            .padding(1)
 
             // Category filter
             Picker("Category", selection: $viewModel.selectedCategory) {
@@ -265,6 +278,81 @@ struct LogsView: View {
             actionTitle: viewModel.searchText.isEmpty ? nil : "Clear Filters",
             action: viewModel.searchText.isEmpty ? nil : { viewModel.clearFilters() }
         )
+    }
+
+    // MARK: - Level Filter Button
+
+    private func levelFilterButton(_ label: String, level: LogLevel?) -> some View {
+        let isActive = viewModel.selectedLevel == level
+        return Button {
+            viewModel.selectedLevel = level
+            viewModel.loadLogs()
+        } label: {
+            Text(label)
+                .font(IVFont.captionMedium)
+                .padding(.horizontal, IVSpacing.sm)
+                .padding(.vertical, IVSpacing.xs)
+                .background {
+                    if isActive {
+                        RoundedRectangle(cornerRadius: IVCornerRadius.sm - 1)
+                            .fill(Color.ivAccent.opacity(0.12))
+                    }
+                }
+                .foregroundColor(isActive ? .ivAccent : .ivTextSecondary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Stats Bar
+
+    private var statsBar: some View {
+        HStack(spacing: IVSpacing.lg) {
+            HStack(spacing: IVSpacing.xs) {
+                Circle()
+                    .fill(levelColor(.info))
+                    .frame(width: 6, height: 6)
+                Text("Info: \(viewModel.levelCounts[.info] ?? 0)")
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+            }
+            HStack(spacing: IVSpacing.xs) {
+                Circle()
+                    .fill(levelColor(.warning))
+                    .frame(width: 6, height: 6)
+                Text("Warning: \(viewModel.levelCounts[.warning] ?? 0)")
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+            }
+            HStack(spacing: IVSpacing.xs) {
+                Circle()
+                    .fill(levelColor(.error))
+                    .frame(width: 6, height: 6)
+                Text("Error: \(viewModel.levelCounts[.error] ?? 0)")
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+            }
+            HStack(spacing: IVSpacing.xs) {
+                Circle()
+                    .fill(levelColor(.debug))
+                    .frame(width: 6, height: 6)
+                Text("Debug: \(viewModel.levelCounts[.debug] ?? 0)")
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextSecondary)
+            }
+
+            Spacer()
+
+            Text("Showing \(viewModel.entries.count) entries")
+                .font(IVFont.caption)
+                .foregroundColor(.ivTextSecondary)
+        }
+        .padding(.horizontal, IVSpacing.xxl)
+        .padding(.vertical, IVSpacing.sm)
+        .background {
+            Rectangle()
+                .fill(Color.ivSurface)
+                .shadow(color: .black.opacity(0.04), radius: 1, y: -1)
+        }
     }
 
     // MARK: - Helpers

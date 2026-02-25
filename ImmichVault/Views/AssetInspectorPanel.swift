@@ -50,14 +50,19 @@ struct AssetInspectorPanel: View {
 
     private var inspectorHeader: some View {
         VStack(alignment: .leading, spacing: IVSpacing.sm) {
-            HStack(spacing: IVSpacing.sm) {
-                Image(systemName: asset.assetType.icon)
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundColor(.ivAccent)
+            HStack(spacing: IVSpacing.md) {
+                RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                    .fill(Color.ivSurface)
+                    .frame(width: 40, height: 40)
+                    .overlay {
+                        Image(systemName: asset.assetType.icon)
+                            .font(.system(size: 20, weight: .light))
+                            .foregroundColor(.ivTextSecondary)
+                    }
 
                 VStack(alignment: .leading, spacing: IVSpacing.xxxs) {
                     Text(asset.metadata.originalFilename ?? "Unknown File")
-                        .font(IVFont.headline)
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.ivTextPrimary)
                         .lineLimit(2)
                         .truncationMode(.middle)
@@ -148,11 +153,11 @@ struct AssetInspectorPanel: View {
     private func metadataRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(IVFont.captionMedium)
-                .foregroundColor(.ivTextSecondary)
+                .font(IVFont.caption)
+                .foregroundColor(.ivTextTertiary)
                 .frame(width: 80, alignment: .leading)
             Text(value)
-                .font(IVFont.body)
+                .font(IVFont.caption)
                 .foregroundColor(.ivTextPrimary)
             Spacer()
         }
@@ -184,7 +189,7 @@ struct AssetInspectorPanel: View {
                 .fill(Color.ivInfo.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: IVCornerRadius.md)
-                        .stroke(Color.ivInfo.opacity(0.15), lineWidth: 1)
+                        .stroke(Color.ivInfo.opacity(0.15), lineWidth: 0.5)
                 )
         }
         .accessibilityElement(children: .combine)
@@ -234,6 +239,10 @@ struct AssetInspectorPanel: View {
         .background {
             RoundedRectangle(cornerRadius: IVCornerRadius.md)
                 .fill(Color.ivSuccess.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: IVCornerRadius.md)
+                        .stroke(Color.ivSuccess.opacity(0.2), lineWidth: 0.5)
+                )
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Ready for upload. Asset passed all filters.")
@@ -354,7 +363,7 @@ struct SkipReasonCard: View {
 // MARK: - Flow Layout (for subtype tags)
 
 struct FlowLayout: Layout {
-    var spacing: CGFloat = 4
+    var spacing: CGFloat = IVSpacing.xxs
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let result = arrange(proposal: proposal, subviews: subviews)

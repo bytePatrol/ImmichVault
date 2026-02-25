@@ -79,6 +79,19 @@ final class LogsViewModel: ObservableObject {
         loadLogs()
     }
 
+    // MARK: - Computed
+
+    /// Level counts from the currently loaded entries for the stats bar.
+    var levelCounts: [LogLevel: Int] {
+        var counts: [LogLevel: Int] = [:]
+        for entry in entries {
+            if let level = LogLevel(rawValue: entry.level) {
+                counts[level, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
     // MARK: - Export
 
     func exportJSON() -> Data? {

@@ -49,15 +49,20 @@ struct MainNavigationView: View {
                 .allowsHitTesting(appState.selectedNavItem == .jobs)
                 .accessibilityHidden(appState.selectedNavItem != .jobs)
 
-            LogsView()
-                .opacity(appState.selectedNavItem == .logs ? 1 : 0)
-                .allowsHitTesting(appState.selectedNavItem == .logs)
-                .accessibilityHidden(appState.selectedNavItem != .logs)
+            SetupView()
+                .opacity(appState.selectedNavItem == .setup ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .setup)
+                .accessibilityHidden(appState.selectedNavItem != .setup)
 
             SettingsView()
                 .opacity(appState.selectedNavItem == .settings ? 1 : 0)
                 .allowsHitTesting(appState.selectedNavItem == .settings)
                 .accessibilityHidden(appState.selectedNavItem != .settings)
+
+            LogsView()
+                .opacity(appState.selectedNavItem == .logs ? 1 : 0)
+                .allowsHitTesting(appState.selectedNavItem == .logs)
+                .accessibilityHidden(appState.selectedNavItem != .logs)
         }
     }
 
@@ -108,18 +113,43 @@ struct MainNavigationView: View {
 struct SidebarView: View {
     @Binding var selection: NavigationItem
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var settings: AppSettings
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(NavigationSection.allCases, id: \.self) { section in
-                Section {
-                    ForEach(section.items) { item in
-                        NavigationLink(value: item) {
-                            Label(item.label, systemImage: item.icon)
-                        }
+            // Dashboard (standalone)
+            Section {
+                ForEach(NavigationSection.overview.items) { item in
+                    NavigationLink(value: item) {
+                        Label(item.label, systemImage: item.icon)
                     }
-                } header: {
-                    Text(section.rawValue.uppercased())
+                }
+            }
+
+            // Photos Upload + Optimizer
+            Section {
+                ForEach(NavigationSection.workflow.items) { item in
+                    NavigationLink(value: item) {
+                        Label(item.label, systemImage: item.icon)
+                    }
+                }
+            }
+
+            // Jobs
+            Section {
+                ForEach(NavigationSection.monitoring.items) { item in
+                    NavigationLink(value: item) {
+                        Label(item.label, systemImage: item.icon)
+                    }
+                }
+            }
+
+            // Setup, Settings, Logs
+            Section {
+                ForEach(NavigationSection.system.items) { item in
+                    NavigationLink(value: item) {
+                        Label(item.label, systemImage: item.icon)
+                    }
                 }
             }
         }
@@ -132,36 +162,30 @@ struct SidebarView: View {
         .frame(minWidth: 200, idealWidth: 220)
     }
 
+    // MARK: - Connection Status Bar (Figma: bottom of sidebar)
+
     @ViewBuilder
     private var connectionStatusBar: some View {
-        HStack(spacing: IVSpacing.sm) {
-            Circle()
-                .fill(connectionColor)
-                .frame(width: 8, height: 8)
+        VStack(alignment: .leading, spacing: IVSpacing.xxs) {
+            Text(connectionTitle)
+                .font(IVFont.caption)
+                .foregroundColor(.ivTextTertiary)
 
-            VStack(alignment: .leading, spacing: 0) {
-                Text(connectionLabel)
-                    .font(IVFont.captionMedium)
-                    .foregroundColor(.ivTextPrimary)
+            HStack(spacing: IVSpacing.xs) {
+                Circle()
+                    .fill(connectionColor)
+                    .frame(width: 6, height: 6)
+                Text(connectionDetail)
+                    .font(IVFont.caption)
+                    .foregroundColor(connectionColor)
                     .lineLimit(1)
-
-                if let detail = connectionDetail {
-                    Text(detail)
-                        .font(IVFont.caption)
-                        .foregroundColor(.ivTextTertiary)
-                        .lineLimit(1)
-                }
             }
-
-            Spacer()
         }
-        .padding(IVSpacing.sm)
-        .background {
-            RoundedRectangle(cornerRadius: IVCornerRadius.md)
-                .fill(Color.ivSurface)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, IVSpacing.md)
+        .padding(.vertical, IVSpacing.sm)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Connection: \(connectionLabel)")
+        .accessibilityLabel("Connection: \(connectionTitle)")
     }
 
     private var connectionColor: Color {
@@ -173,20 +197,27 @@ struct SidebarView: View {
         }
     }
 
-    private var connectionLabel: String {
+    private var connectionTitle: String {
         switch appState.connectionStatus {
-        case .connected(_, let user): return user
-        case .connecting: return "Connecting..."
-        case .failed: return "Connection Failed"
-        case .disconnected: return "Not Connected"
+        case .connected: return "Server: Connected"
+        case .connecting: return "Server: Connecting"
+        case .failed: return "Server: Failed"
+        case .disconnected: return "Server: Disconnected"
         }
     }
 
-    private var connectionDetail: String? {
+    private var connectionDetail: String {
         switch appState.connectionStatus {
-        case .connected(let version, _): return "Immich \(version)"
+        case .connected:
+            // Show the server URL host
+            if let url = URL(string: settings.immichServerURL),
+               let host = url.host {
+                return host
+            }
+            return settings.immichServerURL
+        case .connecting: return "Establishing connection..."
         case .failed(let reason): return reason
-        default: return nil
+        case .disconnected: return "Not configured"
         }
     }
 }

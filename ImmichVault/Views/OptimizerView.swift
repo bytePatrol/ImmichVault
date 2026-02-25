@@ -17,6 +17,7 @@ struct OptimizerView: View {
     var body: some View {
         VStack(spacing: 0) {
             configPanel
+            Divider()
             headerBanners
 
             if viewModel.candidates.isEmpty && !viewModel.isDiscovering {
@@ -24,6 +25,11 @@ struct OptimizerView: View {
             } else if viewModel.isDiscovering {
                 discoveryProgressView
             } else {
+                // Sort bar (list view only)
+                if viewModel.viewMode == .list && !viewModel.filteredCandidates.isEmpty {
+                    sortBar
+                    Divider()
+                }
                 candidateTable
             }
 
@@ -35,162 +41,171 @@ struct OptimizerView: View {
         .frame(minWidth: 560)
     }
 
-    // MARK: - Config Panel
+    // MARK: - Config Panel (Figma: p-4 border-b, section headers + inline rows)
 
     private var configPanel: some View {
-        HStack(alignment: .top, spacing: IVSpacing.lg) {
-            IVGroupedPanel("FILTERS") {
-                filtersContent
-            }
-            .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: IVSpacing.lg) {
+            // FILTERS: section header + horizontal row of controls
+            VStack(alignment: .leading, spacing: IVSpacing.sm) {
+                Text("FILTERS")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.ivTextSecondary)
+                    .tracking(0.5)
 
-            IVGroupedPanel("ENCODING") {
-                encodingContent
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .padding(.horizontal, IVSpacing.lg)
-        .padding(.vertical, IVSpacing.lg)
-    }
-
-    // MARK: - Filters Content
-
-    private var filtersContent: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.sm) {
-            HStack {
-                Text("Min Size")
-                    .font(configLabel)
-                    .frame(width: 72, alignment: .leading)
-                InlineStepper(value: $viewModel.sizeThresholdMB, range: 50...5000, step: 50, suffix: "MB")
-            }
-
-            HStack {
-                Text("After date")
-                    .font(configLabel)
-                    .frame(width: 72, alignment: .leading)
-                FilterDateField(date: $viewModel.dateAfter, placeholder: "Any")
-            }
-
-            HStack {
-                Text("Before date")
-                    .font(configLabel)
-                    .frame(width: 72, alignment: .leading)
-                FilterDateField(date: $viewModel.dateBefore, placeholder: "Any")
-            }
-        }
-        .foregroundColor(.ivTextSecondary)
-        .controlSize(.small)
-    }
-
-    // MARK: - Encoding Content
-
-    private var encodingContent: some View {
-        VStack(alignment: .leading, spacing: IVSpacing.sm) {
-            HStack {
-                Text("Preset")
-                    .font(configLabel)
-                    .frame(width: 72, alignment: .leading)
-                Picker("Preset", selection: $viewModel.selectedPreset) {
-                    ForEach(TranscodePreset.allPresets) { preset in
-                        Text(preset.name).tag(preset)
+                HStack(spacing: IVSpacing.xl) {
+                    // Min Size
+                    HStack(spacing: IVSpacing.xs) {
+                        Text("Min Size")
+                            .font(configLabel)
+                            .foregroundColor(.ivTextSecondary)
+                        InlineStepper(value: $viewModel.sizeThresholdMB, range: 50...5000, step: 50, suffix: "MB")
                     }
+
+                    // After date
+                    HStack(spacing: IVSpacing.xs) {
+                        Text("After")
+                            .font(configLabel)
+                            .foregroundColor(.ivTextSecondary)
+                        FilterDateField(date: $viewModel.dateAfter, placeholder: "Any")
+                    }
+
+                    // Before date
+                    HStack(spacing: IVSpacing.xs) {
+                        Text("Before")
+                            .font(configLabel)
+                            .foregroundColor(.ivTextSecondary)
+                        FilterDateField(date: $viewModel.dateBefore, placeholder: "Any")
+                    }
+
+                    Spacer()
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .font(.system(size: 12))
             }
 
-            HStack {
-                Text("Provider")
-                    .font(configLabel)
-                    .frame(width: 72, alignment: .leading)
-                HStack(spacing: IVSpacing.xs) {
-                    Circle()
-                        .fill(providerHealthColor)
-                        .frame(width: 6, height: 6)
-                        .help(providerHealthTooltip)
-                        .accessibilityLabel(providerHealthTooltip)
+            // ENCODING: section header + inline rows
+            VStack(alignment: .leading, spacing: IVSpacing.sm) {
+                Text("ENCODING")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.ivTextSecondary)
+                    .tracking(0.5)
 
-                    Picker("Provider", selection: $viewModel.selectedProvider) {
-                        ForEach(TranscodeProviderType.allCases, id: \.self) { provider in
-                            Text(provider.label).tag(provider)
+                // Preset + Provider side-by-side
+                HStack(spacing: IVSpacing.xl) {
+                    // Preset
+                    HStack(spacing: IVSpacing.xs) {
+                        Text("Preset")
+                            .font(configLabel)
+                            .foregroundColor(.ivTextSecondary)
+                            .frame(minWidth: 48, alignment: .leading)
+                        Picker("Preset", selection: $viewModel.selectedPreset) {
+                            ForEach(TranscodePreset.allPresets) { preset in
+                                Text(preset.name).tag(preset)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .font(.system(size: 12))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Provider
+                    HStack(spacing: IVSpacing.xs) {
+                        Text("Provider")
+                            .font(configLabel)
+                            .foregroundColor(.ivTextSecondary)
+                            .frame(minWidth: 54, alignment: .leading)
+                        Circle()
+                            .fill(providerHealthColor)
+                            .frame(width: 6, height: 6)
+                            .help(providerHealthTooltip)
+                            .accessibilityLabel(providerHealthTooltip)
+                        Picker("Provider", selection: $viewModel.selectedProvider) {
+                            ForEach(TranscodeProviderType.allCases, id: \.self) { provider in
+                                Text(provider.label).tag(provider)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .font(.system(size: 12))
+                        Button {
+                            Task { await viewModel.checkProviderHealth() }
+                        } label: {
+                            Text("Test")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundColor(.ivAccent)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                // Custom preset controls (conditional, with left accent border)
+                if viewModel.isCustomPreset {
+                    VStack(alignment: .leading, spacing: IVSpacing.sm) {
+                        HStack(spacing: IVSpacing.xs) {
+                            Text("Codec")
+                                .font(configLabel)
+                                .foregroundColor(.ivTextSecondary)
+                                .frame(minWidth: 60, alignment: .leading)
+                            Picker("Codec", selection: $viewModel.customCodec) {
+                                Text("H.264").tag(VideoCodec.h264)
+                                Text("H.265").tag(VideoCodec.h265)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 140)
+                        }
+
+                        HStack(spacing: IVSpacing.xs) {
+                            Text("Resolution")
+                                .font(configLabel)
+                                .foregroundColor(.ivTextSecondary)
+                                .frame(minWidth: 60, alignment: .leading)
+                            Picker("Resolution", selection: $viewModel.customResolution) {
+                                ForEach(TargetResolution.allCases) { res in
+                                    Text(res.label).tag(res)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .font(.system(size: 12))
+                            .frame(width: 200)
+                        }
+
+                        HStack(spacing: IVSpacing.xs) {
+                            Text("CRF")
+                                .font(configLabel)
+                                .foregroundColor(.ivTextSecondary)
+                                .frame(minWidth: 60, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(viewModel.customCRF) },
+                                    set: { viewModel.customCRF = Int($0) }
+                                ),
+                                in: 18...35,
+                                step: 1
+                            )
+                            .frame(maxWidth: 400)
+
+                            Text("\(viewModel.customCRF)")
+                                .font(IVFont.mono)
+                                .foregroundColor(.ivTextPrimary)
+                                .frame(width: 20, alignment: .trailing)
+                                .monospacedDigit()
+
+                            crfQualityBadge(viewModel.customCRF)
                         }
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .font(.system(size: 12))
-
-                    Button {
-                        Task { await viewModel.checkProviderHealth() }
-                    } label: {
-                        Text("Test")
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(.ivAccent)
-                }
-            }
-
-            // Custom preset controls
-            if viewModel.isCustomPreset {
-                HStack {
-                    Text("Codec")
-                        .font(configLabel)
-                        .frame(width: 72, alignment: .leading)
-                    Picker("Codec", selection: $viewModel.customCodec) {
-                        Text("H.264").tag(VideoCodec.h264)
-                        Text("H.265").tag(VideoCodec.h265)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 140)
-                }
-
-                HStack {
-                    Text("Resolution")
-                        .font(configLabel)
-                        .frame(width: 72, alignment: .leading)
-                    Picker("Resolution", selection: $viewModel.customResolution) {
-                        ForEach(TargetResolution.allCases) { res in
-                            Text(res.label).tag(res)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .font(.system(size: 12))
-                }
-
-                HStack {
-                    Text("CRF")
-                        .font(configLabel)
-                        .frame(width: 72, alignment: .leading)
-                    HStack(spacing: IVSpacing.xxs) {
-                        Slider(
-                            value: Binding(
-                                get: { Double(viewModel.customCRF) },
-                                set: { viewModel.customCRF = Int($0) }
-                            ),
-                            in: 18...35,
-                            step: 1
-                        )
-                        .frame(minWidth: 80, maxWidth: 120)
-
-                        Text("\(viewModel.customCRF)")
-                            .font(IVFont.mono)
-                            .foregroundColor(.ivTextPrimary)
-                            .frame(width: 20, alignment: .trailing)
-                            .monospacedDigit()
-
-                        Text(crfQualityLabel(viewModel.customCRF))
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(crfQualityColor(viewModel.customCRF))
-                            .textCase(.uppercase)
-                            .frame(width: 52, alignment: .leading)
+                    .padding(.leading, IVSpacing.lg)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(Color.ivAccent.opacity(0.2))
+                            .frame(width: 2)
                     }
                 }
             }
         }
-        .foregroundColor(.ivTextSecondary)
+        .padding(IVSpacing.lg)
+        .background(Color.ivBackground)
         .controlSize(.small)
     }
 
@@ -245,6 +260,37 @@ struct OptimizerView: View {
         }
     }
 
+    // MARK: - Sort Bar (Figma: between config panel and table, list view only)
+
+    private var sortBar: some View {
+        HStack {
+            Text("\(viewModel.filteredCandidates.count) candidates")
+                .font(IVFont.caption)
+                .foregroundColor(.ivTextSecondary)
+
+            Spacer()
+
+            HStack(spacing: IVSpacing.xs) {
+                Text("Sort by")
+                    .font(IVFont.caption)
+                    .foregroundColor(.ivTextTertiary)
+                Picker("Sort", selection: $viewModel.sortOrder) {
+                    ForEach(OptimizerViewModel.CandidateSortOrder.allCases) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .font(.system(size: 12))
+                .frame(width: 160)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, IVSpacing.lg)
+        .padding(.vertical, IVSpacing.xs)
+        .background(Color.ivSurface)
+    }
+
     // MARK: - Empty State
 
     private var emptyState: some View {
@@ -292,6 +338,35 @@ struct OptimizerView: View {
     // MARK: - Candidate Table
 
     private var candidateTable: some View {
+        Group {
+            if viewModel.viewMode == .grid {
+                candidateGrid
+            } else {
+                candidateList
+            }
+        }
+    }
+
+    private var candidateGrid: some View {
+        CandidateGridView(
+            candidates: viewModel.filteredCandidates,
+            serverURL: viewModel.cachedServerURL,
+            apiKey: viewModel.cachedAPIKey,
+            selectedCandidateID: $viewModel.selectedCandidateID,
+            selectedCandidateIDs: $viewModel.selectedCandidateIDs,
+            onInspect: { id in
+                viewModel.selectedCandidateID = id
+                if !viewModel.showInspector {
+                    viewModel.showInspector = true
+                }
+            },
+            onOpenInImmich: { id in openInImmich(id) },
+            onTranscodeNow: { id in viewModel.transcodeNow(id) },
+            onToggleSelection: { id in viewModel.toggleCandidateSelection(id) }
+        )
+    }
+
+    private var candidateList: some View {
         VStack(spacing: 0) {
             candidateTableHeader
 
@@ -330,12 +405,26 @@ struct OptimizerView: View {
         }
     }
 
+    private var allFilteredSelected: Bool {
+        let ids = Set(viewModel.filteredCandidates.map(\.id))
+        return !ids.isEmpty && ids.isSubset(of: viewModel.selectedCandidateIDs)
+    }
+
     private var candidateTableHeader: some View {
         HStack(spacing: IVSpacing.sm) {
-            Image(systemName: "checkmark.square.fill")
-                .font(.system(size: 12))
-                .foregroundColor(.ivAccent)
-                .frame(width: 32, alignment: .center)
+            Button {
+                if allFilteredSelected {
+                    viewModel.deselectAll()
+                } else {
+                    viewModel.selectAll()
+                }
+            } label: {
+                Image(systemName: allFilteredSelected ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 12))
+                    .foregroundColor(allFilteredSelected ? .ivAccent : .ivTextTertiary)
+            }
+            .buttonStyle(.borderless)
+            .frame(width: 32, alignment: .center)
 
             Text("Filename")
                 .frame(minWidth: 120, alignment: .leading)
@@ -504,7 +593,7 @@ struct OptimizerView: View {
         }
     }
 
-    // MARK: - Status Bar
+    // MARK: - Status Bar (Figma: left = counts, right = savings)
 
     private var statusBar: some View {
         VStack(spacing: 0) {
@@ -529,86 +618,61 @@ struct OptimizerView: View {
             Divider()
 
             // Main status bar
-            HStack(spacing: IVSpacing.sm) {
-                statusItems
+            HStack {
+                // Left: counts separated by middle dots
+                HStack(spacing: IVSpacing.sm) {
+                    Text("\(viewModel.candidates.count) candidates")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+
+                    Text("\u{00B7}")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextTertiary)
+
+                    Text("\(viewModel.selectedCandidateCount) selected")
+                        .font(IVFont.caption)
+                        .foregroundColor(.ivTextSecondary)
+
+                    if !viewModel.rules.isEmpty {
+                        Text("\u{00B7}")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivTextTertiary)
+                        Text("\(viewModel.matchedCandidateCount) rules matched")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivTextSecondary)
+                    }
+
+                    if viewModel.isProcessing {
+                        Text("\u{00B7}")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivTextTertiary)
+                        Text("Processing")
+                            .font(IVFont.caption)
+                            .foregroundColor(.ivAccent)
+                    }
+                }
+
                 Spacer()
+
+                // Right: savings + cost
+                HStack(spacing: IVSpacing.sm) {
+                    if viewModel.selectedCandidateCount > 0 {
+                        Text("Est. savings: \(formattedBytes(viewModel.totalEstimatedSavings))")
+                            .font(IVFont.captionMedium)
+                            .foregroundColor(.ivSuccess)
+                    }
+
+                    if isCloudProvider && viewModel.estimatedTotalCost > 0 {
+                        Text("Est. cost: \(CostLedger.formatCost(viewModel.estimatedTotalCost))")
+                            .font(IVFont.captionMedium)
+                            .foregroundColor(.ivWarning)
+                    }
+                }
             }
             .padding(.horizontal, IVSpacing.lg)
             .padding(.vertical, IVSpacing.xs)
-            .background(Color.ivBackground)
+            .background(Color.ivSurface)
         }
-    }
-
-    @ViewBuilder
-    private var statusItems: some View {
-        let items = buildStatusItems()
-        ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-            if index > 0 {
-                Text("\u{00B7}")
-                    .font(IVFont.caption)
-                    .foregroundColor(.ivTextTertiary)
-                    .opacity(0.6)
-            }
-            Text(item.text)
-                .font(IVFont.caption)
-                .foregroundColor(item.color)
-        }
-    }
-
-    private struct StatusItem {
-        let text: String
-        let color: Color
-    }
-
-    private func buildStatusItems() -> [StatusItem] {
-        var items: [StatusItem] = []
-
-        items.append(StatusItem(
-            text: "\(viewModel.candidates.count) candidates",
-            color: .ivTextTertiary
-        ))
-
-        items.append(StatusItem(
-            text: "\(viewModel.selectedCandidateCount) selected",
-            color: .ivTextTertiary
-        ))
-
-        if !viewModel.rules.isEmpty {
-            items.append(StatusItem(
-                text: "\(viewModel.matchedCandidateCount) matched rules",
-                color: .ivTextTertiary
-            ))
-        }
-
-        if viewModel.selectedCandidateCount > 0 {
-            items.append(StatusItem(
-                text: "Est. savings: \(formattedBytes(viewModel.totalEstimatedSavings))",
-                color: .ivSuccess
-            ))
-        }
-
-        if isCloudProvider && viewModel.estimatedTotalCost > 0 {
-            items.append(StatusItem(
-                text: "Est. cost: \(CostLedger.formatCost(viewModel.estimatedTotalCost))",
-                color: .ivWarning
-            ))
-        }
-
-        if viewModel.isProcessing {
-            items.append(StatusItem(
-                text: "Processing",
-                color: .ivAccent
-            ))
-        }
-
-        if viewModel.filteredCandidates.count != viewModel.candidates.count {
-            items.append(StatusItem(
-                text: "Showing \(viewModel.filteredCandidates.count) of \(viewModel.candidates.count)",
-                color: .ivTextTertiary
-            ))
-        }
-
-        return items
     }
 
     // MARK: - Helpers
@@ -688,25 +752,29 @@ struct OptimizerView: View {
         return String(format: "%d:%02d", minutes, secs)
     }
 
-    // MARK: - CRF Quality Helpers
+    // MARK: - CRF Quality Helpers (Figma: colored pill badge)
 
-    private func crfQualityLabel(_ crf: Int) -> String {
-        switch crf {
-        case ...20: return "Excellent"
-        case 21...24: return "High"
-        case 25...28: return "Good"
-        case 29...32: return "Fair"
-        default: return "Low"
-        }
+    private func crfQualityBadge(_ crf: Int) -> some View {
+        let (label, color) = crfQualityInfo(crf)
+        return Text(label)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(color)
+            .textCase(.uppercase)
+            .padding(.horizontal, IVSpacing.xs)
+            .padding(.vertical, IVSpacing.xxxs)
+            .background {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(color.opacity(0.12))
+            }
     }
 
-    private func crfQualityColor(_ crf: Int) -> Color {
+    private func crfQualityInfo(_ crf: Int) -> (String, Color) {
         switch crf {
-        case ...20: return .ivSuccess.opacity(0.7)
-        case 21...24: return .ivSuccess.opacity(0.6)
-        case 25...28: return .ivAccent.opacity(0.7)
-        case 29...32: return .ivWarning.opacity(0.7)
-        default: return .ivError.opacity(0.7)
+        case ...21: return ("BEST", .ivSuccess)
+        case 22...24: return ("HIGH", .ivInfo)
+        case 25...28: return ("GOOD", .ivWarning)
+        case 29...31: return ("LOW", .ivTextSecondary)
+        default: return ("MIN", .ivError)
         }
     }
 }
@@ -719,11 +787,29 @@ struct CandidateInspectorPanel: View {
     let provider: TranscodeProviderType
     let estimatedCost: Double?
     let matchedRule: TranscodeRule?
+    let serverURL: String
+    let apiKey: String
     let onTranscodeNow: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                // Video preview player
+                if !serverURL.isEmpty && !apiKey.isEmpty {
+                    VideoPreviewPlayer(
+                        assetId: candidate.id,
+                        duration: candidate.detail.duration,
+                        serverURL: serverURL,
+                        apiKey: apiKey,
+                        thumbhash: candidate.detail.thumbhash
+                    )
+                    .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: IVCornerRadius.lg))
+                    .padding(.horizontal, IVSpacing.lg)
+                    .padding(.top, IVSpacing.lg)
+                    .padding(.bottom, IVSpacing.md)
+                }
+
                 inspectorHeader
                     .padding(IVSpacing.lg)
 

@@ -220,7 +220,7 @@ struct PhotosUploadView: View {
                                 .stroke(Color.ivBorder, lineWidth: 0.5)
                         )
                 }
-                .frame(maxWidth: 300)
+                .frame(maxWidth: 280)
 
                 // Status filter pills
                 ForEach(PhotosViewModel.StatusFilterOption.allCases) { option in
@@ -293,16 +293,16 @@ struct PhotosUploadView: View {
                 if let count {
                     Text("\(count)")
                         .font(IVFont.monoSmall)
-                        .foregroundColor(isActive ? .white.opacity(0.8) : .ivTextTertiary)
+                        .foregroundColor(isActive ? .ivAccent.opacity(0.7) : .ivTextTertiary)
                 }
             }
             .padding(.horizontal, IVSpacing.sm)
             .padding(.vertical, IVSpacing.xxs)
             .background {
                 Capsule()
-                    .fill(isActive ? Color.ivAccent : Color.ivSurface)
+                    .fill(isActive ? Color.ivAccent.opacity(0.12) : Color.ivSurface)
             }
-            .foregroundColor(isActive ? .white : .ivTextSecondary)
+            .foregroundColor(isActive ? .ivAccent : .ivTextSecondary)
         }
         .buttonStyle(.plain)
     }
@@ -403,6 +403,8 @@ struct PhotosUploadView: View {
                 .frame(width: 100, alignment: .leading)
             Text("Resolution")
                 .frame(width: 90, alignment: .trailing)
+            Text("Size")
+                .frame(width: 80, alignment: .trailing)
             Text("Status")
                 .frame(width: 130, alignment: .center)
         }
@@ -476,6 +478,12 @@ struct PhotosUploadView: View {
                 }
             }
             .frame(width: 90, alignment: .trailing)
+
+            // File size
+            Text(asset.metadata.fileSizeString ?? "\u{2014}")
+                .font(IVFont.monoSmall)
+                .foregroundColor(.ivTextTertiary)
+                .frame(width: 80, alignment: .trailing)
 
             // Status badge — skip reasons take priority, then DB upload state
             Group {
@@ -666,6 +674,7 @@ struct PhotosUploadView: View {
         var filename: CGFloat = 200
         var date: CGFloat = 100
         var resolution: CGFloat = 90
+        var size: CGFloat = 80
         var status: CGFloat = 130
     }
 }

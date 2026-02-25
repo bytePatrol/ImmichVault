@@ -47,10 +47,12 @@ struct ImmichVaultApp: App {
                     .keyboardShortcut("3", modifiers: .command)
                 Button("Jobs") { appState.selectedNavItem = .jobs }
                     .keyboardShortcut("4", modifiers: .command)
-                Button("Logs") { appState.selectedNavItem = .logs }
+                Button("Setup") { appState.selectedNavItem = .setup }
                     .keyboardShortcut("5", modifiers: .command)
                 Button("Settings") { appState.selectedNavItem = .settings }
                     .keyboardShortcut("6", modifiers: .command)
+                Button("Logs") { appState.selectedNavItem = .logs }
+                    .keyboardShortcut("7", modifiers: .command)
             }
         }
     }

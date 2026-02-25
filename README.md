@@ -137,7 +137,20 @@ Grab the latest DMG from the [Releases](https://github.com/bytePatrol/ImmichVaul
 
 1. Open `ImmichVault.dmg`
 2. Drag **ImmichVault** to your **Applications** folder
-3. Launch and configure your Immich server URL + API key
+3. Double-click to launch — macOS will show **"ImmichVault can't be opened"** (see below)
+4. After allowing the app, relaunch and configure your Immich server URL + API key
+
+#### First Launch — Gatekeeper Notice
+
+Because ImmichVault is distributed outside the Mac App Store, macOS Gatekeeper will block it the first time you open it. **This only needs to be done once.**
+
+1. Double-click **ImmichVault** — macOS will display *"ImmichVault can't be opened because Apple cannot check it for malicious software"* and offer to move it to the Trash. **Click Done** (do not trash the app).
+2. Open **System Settings** → **Privacy & Security**.
+3. Scroll down to the **Security** section — you'll see *"ImmichVault was blocked from use because it is not from an identified developer."*
+4. Click **Open Anyway** and enter your password when prompted.
+5. macOS will show one final confirmation — click **Open**.
+
+ImmichVault will launch normally from now on without any further prompts.
 
 ### Build from Source
 
